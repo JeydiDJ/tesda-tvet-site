@@ -964,11 +964,9 @@ export function PhilippinesMapPanel({
       <div className="pointer-events-none absolute inset-0 z-20 mx-auto w-full max-w-[1900px] px-4 sm:px-6 lg:px-8">
         <div className="absolute left-3 top-[clamp(74px,8.5vh,96px)] w-[min(700px,42vw)] sm:left-5 lg:left-8">
           <div className="pointer-events-auto rounded-[2rem] px-1.5 py-1.5">
-            <div className="inline-flex items-center gap-2.5 rounded-full border border-[#ffd8d8] bg-[rgba(255,245,245,0.96)] px-4 py-2 shadow-[0_10px_24px_rgba(255,73,73,0.08)]">
-              <span className="h-4 w-4 rounded-full bg-[var(--danger)]" />
-              <span className="text-xs font-extrabold uppercase tracking-[0.18em] text-[var(--danger)] sm:text-sm">
-                Live system
-              </span>
+            <div className="inline-flex items-center gap-2.5  px-4 py-2 shadow-[0_10px_24px_rgba(0,0,0,0)]">
+             
+             
             </div>
 
             <h1 className="mt-3 max-w-[640px] font-display text-[clamp(2.1rem,4.2vw,3.8rem)] font-extrabold uppercase leading-[0.9] tracking-[-0.07em] text-[var(--tesda-blue)]">
