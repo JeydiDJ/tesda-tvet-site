@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { DataBlueprint } from "@/components/dashboard/DataBlueprint";
-import { PhilippinesMapPanel } from "@/components/dashboard/PhilippinesMapPanel";
+import { PhilippinesMapPanel } from "@/features/map/components/PhilippinesMapPanel";
 import { ProgramList } from "@/components/dashboard/ProgramList";
 import {
   buildAreaIndex,
@@ -16,11 +16,6 @@ export function TesdaDashboard() {
   const activeArea = areaIndex.get(activeId) ?? tesdaAtlas;
   const path = getAreaPath(tesdaAtlas, activeArea.id);
 
-  const handleBack = () => {
-    if (!activeArea.parentId) return;
-    setActiveId(activeArea.parentId);
-  };
-
   const handleSelect = (id: string) => {
     setActiveId(id);
   };
@@ -31,7 +26,6 @@ export function TesdaDashboard() {
         activeArea={activeArea}
         path={path}
         onSelect={handleSelect}
-        onBack={handleBack}
         onInteractionStart={() => undefined}
       />
 
