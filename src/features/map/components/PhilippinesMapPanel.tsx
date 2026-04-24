@@ -15,11 +15,21 @@ const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 const BOUNDARY_SOURCE_ID = "tesda-boundaries";
 const BOUNDARY_FILL_LAYER_ID = "tesda-boundary-fill";
 const BOUNDARY_LINE_LAYER_ID = "tesda-boundary-line";
+const BOUNDARY_EXTRUSION_LAYER_ID = "tesda-boundary-extrusion";
+const BOUNDARY_EXTRUSION_SOURCE_ID = "tesda-boundary-extrusion-source";
+const BOUNDARY_LABEL_LAYER_ID = "tesda-boundary-label";
+const BOUNDARY_LABEL_SHADOW_LAYER_ID = "tesda-boundary-label-shadow";
+const BOUNDARY_LABEL_GLOW_LAYER_ID = "tesda-boundary-label-glow";
+const BOUNDARY_LABEL_SOURCE_ID = "tesda-boundary-label-source";
 const CONTEXT_BOUNDARY_SOURCE_ID = "tesda-context-boundaries";
 const CONTEXT_BOUNDARY_FILL_LAYER_ID = "tesda-context-boundary-fill";  
 const CONTEXT_BOUNDARY_LINE_LAYER_ID = "tesda-context-boundary-line";
 const PH_MASK_SOURCE_ID = "tesda-ph-mask";
 const PH_MASK_LAYER_ID = "tesda-ph-mask-fill";
+const MUNICIPALITY_EXTRUSION_HEIGHT = 4200;
+const MUNICIPALITY_EXTRUSION_OPACITY = 0.76;
+const MUNICIPALITY_EXTRUSION_RISE_DURATION_MS = 260;
+const MUNICIPALITY_EXTRUSION_DROP_DURATION_MS = 180;
 
 const REGION_BOUNDARY_GEOJSON_PATHS = [
   "/geojson/regions/provdists-region-100000000.0.01.json",
@@ -39,6 +49,19 @@ const REGION_BOUNDARY_GEOJSON_PATHS = [
   "/geojson/regions/provdists-region-1600000000.0.01.json",
   "/geojson/regions/provdists-region-1700000000.0.01.json",
   "/geojson/regions/provdists-region-1900000000.0.01.json",
+] as const;
+
+const MUNICIPALITY_FILL_PALETTE = [
+  "#2f6ee5",
+  "#3f84ee",
+  "#53a0f2",
+  "#66b8f4",
+  "#7bc6ec",
+  "#5ca3d7",
+  "#4c8fca",
+  "#3f7ec0",
+  "#5f95e0",
+  "#7aa7e8",
 ] as const;
 
 type DrillLevel = "country" | "region" | "province";
@@ -295,14 +318,22 @@ function normalizeGeoJson(raw: unknown): GeoJsonFeatureCollection {
     type: "FeatureCollection",
     features: (raw.features as GeoJsonFeature[])
       .filter((feature) => feature?.type === "Feature" && Boolean(feature.geometry))
-      .map((feature) => ({
-        ...feature,
-        properties: {
-          ...(feature.properties ?? {}),
-          featureName: getFeatureName(feature.properties),
-          featureCode: getFeatureCode(feature.properties),
-        },
-      })),
+      .map((feature, index) => {
+        const featureCode = getFeatureCode(feature.properties);
+        const stableId =
+          feature.id ??
+          (featureCode ? `feature-${featureCode}` : `feature-index-${index}`);
+
+        return {
+          ...feature,
+          id: stableId,
+          properties: {
+            ...(feature.properties ?? {}),
+            featureName: getFeatureName(feature.properties),
+            featureCode,
+          },
+        };
+      }),
   };
 }
 
@@ -326,6 +357,37 @@ function getExpectedChildLevelByDrillLevel(level: DrillLevel): "region" | "provi
   if (level === "country") return "region";
   if (level === "region") return "province";
   return "city";
+}
+
+function applyMunicipalityColors(collection: GeoJsonFeatureCollection): GeoJsonFeatureCollection {
+  const ordered = [...collection.features].sort((left, right) =>
+    String(getFeatureCode(left.properties)).localeCompare(String(getFeatureCode(right.properties))),
+  );
+
+  const colorByCode = new Map<string, string>();
+  ordered.forEach((feature, index) => {
+    const code = String(getFeatureCode(feature.properties));
+    if (!code) return;
+    if (!colorByCode.has(code)) {
+      colorByCode.set(code, MUNICIPALITY_FILL_PALETTE[index % MUNICIPALITY_FILL_PALETTE.length]);
+    }
+  });
+
+  return {
+    type: "FeatureCollection",
+    features: collection.features.map((feature) => {
+      const code = String(getFeatureCode(feature.properties));
+      const areaColor = colorByCode.get(code);
+      if (!areaColor) return feature;
+      return {
+        ...feature,
+        properties: {
+          ...(feature.properties ?? {}),
+          areaColor,
+        },
+      };
+    }),
+  };
 }
 
 function collectLngLatPairs(geometry: GeoJSON.Geometry): Array<[number, number]> {
@@ -354,6 +416,32 @@ function collectLngLatPairs(geometry: GeoJSON.Geometry): Array<[number, number]>
   return [];
 }
 
+function getGeometryCenterPoint(
+  geometry: GeoJSON.Geometry,
+): GeoJSON.Point | null {
+  const pairs = collectLngLatPairs(geometry);
+  if (pairs.length === 0) {
+    return null;
+  }
+
+  let minLng = pairs[0][0];
+  let maxLng = pairs[0][0];
+  let minLat = pairs[0][1];
+  let maxLat = pairs[0][1];
+
+  pairs.forEach(([lng, lat]) => {
+    if (lng < minLng) minLng = lng;
+    if (lng > maxLng) maxLng = lng;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+  });
+
+  return {
+    type: "Point",
+    coordinates: [(minLng + maxLng) / 2, (minLat + maxLat) / 2],
+  };
+}
+
 export function PhilippinesMapPanel({
   activeArea,
   path,
@@ -373,6 +461,8 @@ export function PhilippinesMapPanel({
   const hoveredBoundaryIdRef = useRef<string | number | null>(null);
   const hoveredContextBoundaryIdRef = useRef<string | number | null>(null);
   const resolvedPsgcByAreaIdRef = useRef<Record<string, string>>({});
+  const extrusionClearTimeoutRef = useRef<number | null>(null);
+  const extrusionRiseTimeoutRef = useRef<number | null>(null);
   const [drillContext, setDrillContext] = useState<DrillContext>({
     level: "country",
     selectedRegionPsgc: null,
@@ -385,6 +475,8 @@ export function PhilippinesMapPanel({
     name: string;
     level: AreaNode["level"];
   } | null>(null);
+  const [isMunicipalitySelected, setIsMunicipalitySelected] = useState(false);
+  const isMunicipalitySelectedRef = useRef(false);
 
   useEffect(() => {
     interactionRef.current = onInteractionStart;
@@ -401,6 +493,10 @@ export function PhilippinesMapPanel({
   useEffect(() => {
     areaRef.current = activeArea;
   }, [activeArea]);
+
+  useEffect(() => {
+    isMunicipalitySelectedRef.current = isMunicipalitySelected;
+  }, [isMunicipalitySelected]);
 
   useEffect(() => {
     drillContextRef.current = drillContext;
@@ -459,13 +555,24 @@ export function PhilippinesMapPanel({
         if (disposed) return;
         const styleLayers = map.getStyle().layers ?? [];
         styleLayers.forEach((layer) => {
-          if (layer.type === "symbol") {
-            map.setLayoutProperty(layer.id, "visibility", "none");
-          }
+          // Hide all base-style layers so only GeoJSON vector overlays are visible.
+          map.setLayoutProperty(layer.id, "visibility", "none");
         });
 
         if (!map.getSource(BOUNDARY_SOURCE_ID)) {
           map.addSource(BOUNDARY_SOURCE_ID, {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] },
+          });
+        }
+        if (!map.getSource(BOUNDARY_EXTRUSION_SOURCE_ID)) {
+          map.addSource(BOUNDARY_EXTRUSION_SOURCE_ID, {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] },
+          });
+        }
+        if (!map.getSource(BOUNDARY_LABEL_SOURCE_ID)) {
+          map.addSource(BOUNDARY_LABEL_SOURCE_ID, {
             type: "geojson",
             data: { type: "FeatureCollection", features: [] },
           });
@@ -502,7 +609,7 @@ export function PhilippinesMapPanel({
                 "#1d4ed8",
                 ["boolean", ["feature-state", "hovered"], false],
                 "#4f7ef1",
-                "#2e67f5",
+                ["coalesce", ["get", "areaColor"], "#2e67f5"],
               ],
               "fill-opacity": [
                 "case",
@@ -540,6 +647,238 @@ export function PhilippinesMapPanel({
                 0.8,
                 0,
               ],
+            },
+          });
+        }
+
+        if (!map.getLayer(BOUNDARY_EXTRUSION_LAYER_ID)) {
+          map.addLayer({
+            id: BOUNDARY_EXTRUSION_LAYER_ID,
+            type: "fill-extrusion",
+            source: BOUNDARY_EXTRUSION_SOURCE_ID,
+            paint: {
+              "fill-extrusion-color": ["coalesce", ["get", "areaColor"], "#1f4fd1"],
+              "fill-extrusion-height": 0,
+              "fill-extrusion-height-transition": {
+                duration: MUNICIPALITY_EXTRUSION_RISE_DURATION_MS,
+                delay: 0,
+              },
+              "fill-extrusion-base": 0,
+              "fill-extrusion-opacity": 0,
+              "fill-extrusion-opacity-transition": {
+                duration: MUNICIPALITY_EXTRUSION_RISE_DURATION_MS,
+                delay: 0,
+              },
+              "fill-extrusion-vertical-gradient": true,
+            },
+          });
+        }
+
+        const animateExtrusionDown = (clearAfter = true) => {
+          const extrusionSource = map.getSource(BOUNDARY_EXTRUSION_SOURCE_ID) as
+            | mapboxgl.GeoJSONSource
+            | undefined;
+          if (!extrusionSource) return;
+
+          if (extrusionClearTimeoutRef.current !== null) {
+            window.clearTimeout(extrusionClearTimeoutRef.current);
+            extrusionClearTimeoutRef.current = null;
+          }
+          if (extrusionRiseTimeoutRef.current !== null) {
+            window.clearTimeout(extrusionRiseTimeoutRef.current);
+            extrusionRiseTimeoutRef.current = null;
+          }
+
+          map.setPaintProperty(BOUNDARY_EXTRUSION_LAYER_ID, "fill-extrusion-height-transition", {
+            duration: MUNICIPALITY_EXTRUSION_DROP_DURATION_MS,
+            delay: 0,
+          });
+          map.setPaintProperty(BOUNDARY_EXTRUSION_LAYER_ID, "fill-extrusion-opacity-transition", {
+            duration: MUNICIPALITY_EXTRUSION_DROP_DURATION_MS,
+            delay: 0,
+          });
+          map.setPaintProperty(BOUNDARY_EXTRUSION_LAYER_ID, "fill-extrusion-height", 0);
+          map.setPaintProperty(BOUNDARY_EXTRUSION_LAYER_ID, "fill-extrusion-opacity", 0);
+
+          if (clearAfter) {
+            extrusionClearTimeoutRef.current = window.setTimeout(() => {
+              extrusionSource.setData({ type: "FeatureCollection", features: [] });
+              extrusionClearTimeoutRef.current = null;
+            }, MUNICIPALITY_EXTRUSION_DROP_DURATION_MS + 40);
+          }
+        };
+
+        const animateExtrusionUp = (
+          geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon,
+          areaColor: string,
+          animateFromCurrentRaised = false,
+        ) => {
+          const extrusionSource = map.getSource(BOUNDARY_EXTRUSION_SOURCE_ID) as
+            | mapboxgl.GeoJSONSource
+            | undefined;
+          if (!extrusionSource) return;
+
+          if (extrusionClearTimeoutRef.current !== null) {
+            window.clearTimeout(extrusionClearTimeoutRef.current);
+            extrusionClearTimeoutRef.current = null;
+          }
+          if (extrusionRiseTimeoutRef.current !== null) {
+            window.clearTimeout(extrusionRiseTimeoutRef.current);
+            extrusionRiseTimeoutRef.current = null;
+          }
+
+          const rise = () => {
+            map.setPaintProperty(BOUNDARY_EXTRUSION_LAYER_ID, "fill-extrusion-height-transition", {
+              duration: MUNICIPALITY_EXTRUSION_RISE_DURATION_MS,
+              delay: 0,
+            });
+            map.setPaintProperty(BOUNDARY_EXTRUSION_LAYER_ID, "fill-extrusion-opacity-transition", {
+              duration: MUNICIPALITY_EXTRUSION_RISE_DURATION_MS,
+              delay: 0,
+            });
+            map.setPaintProperty(BOUNDARY_EXTRUSION_LAYER_ID, "fill-extrusion-height", 0);
+            map.setPaintProperty(BOUNDARY_EXTRUSION_LAYER_ID, "fill-extrusion-opacity", 0);
+
+            extrusionSource.setData({
+              type: "FeatureCollection",
+              features: [
+                {
+                  type: "Feature",
+                  properties: { areaColor },
+                  geometry,
+                },
+              ],
+            });
+
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                map.setPaintProperty(
+                  BOUNDARY_EXTRUSION_LAYER_ID,
+                  "fill-extrusion-height",
+                  MUNICIPALITY_EXTRUSION_HEIGHT,
+                );
+                map.setPaintProperty(
+                  BOUNDARY_EXTRUSION_LAYER_ID,
+                  "fill-extrusion-opacity",
+                  MUNICIPALITY_EXTRUSION_OPACITY,
+                );
+              });
+            });
+          };
+
+          if (animateFromCurrentRaised) {
+            map.setPaintProperty(BOUNDARY_EXTRUSION_LAYER_ID, "fill-extrusion-height-transition", {
+              duration: MUNICIPALITY_EXTRUSION_DROP_DURATION_MS,
+              delay: 0,
+            });
+            map.setPaintProperty(BOUNDARY_EXTRUSION_LAYER_ID, "fill-extrusion-opacity-transition", {
+              duration: MUNICIPALITY_EXTRUSION_DROP_DURATION_MS,
+              delay: 0,
+            });
+            map.setPaintProperty(BOUNDARY_EXTRUSION_LAYER_ID, "fill-extrusion-height", 0);
+            map.setPaintProperty(BOUNDARY_EXTRUSION_LAYER_ID, "fill-extrusion-opacity", 0);
+
+            extrusionRiseTimeoutRef.current = window.setTimeout(() => {
+              rise();
+              extrusionRiseTimeoutRef.current = null;
+            }, MUNICIPALITY_EXTRUSION_DROP_DURATION_MS + 10);
+            return;
+          }
+
+          rise();
+        };
+
+        if (!map.getLayer(BOUNDARY_LABEL_GLOW_LAYER_ID)) {
+          map.addLayer({
+            id: BOUNDARY_LABEL_GLOW_LAYER_ID,
+            type: "circle",
+            source: BOUNDARY_LABEL_SOURCE_ID,
+            paint: {
+              "circle-radius": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                5,
+                14,
+                8,
+                18,
+                11,
+                22,
+              ],
+              "circle-color": "#2b5ed3",
+              "circle-opacity": 0.16,
+              "circle-blur": 0.35,
+              "circle-stroke-color": "#f8fbff",
+              "circle-stroke-width": 1.2,
+              "circle-stroke-opacity": 0.72,
+            },
+          });
+        }
+
+        if (!map.getLayer(BOUNDARY_LABEL_SHADOW_LAYER_ID)) {
+          map.addLayer({
+            id: BOUNDARY_LABEL_SHADOW_LAYER_ID,
+            type: "symbol",
+            source: BOUNDARY_LABEL_SOURCE_ID,
+            layout: {
+              "text-field": ["upcase", ["get", "featureName"]],
+              "text-size": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                5,
+                12,
+                8,
+                14,
+                10,
+                16,
+              ],
+              "text-letter-spacing": 0.07,
+              "text-allow-overlap": true,
+              "text-ignore-placement": true,
+              "text-padding": 6,
+              "text-justify": "center",
+            },
+            paint: {
+              "text-color": "rgba(11, 31, 74, 0.34)",
+              "text-translate": [0, 1.6],
+              "text-translate-anchor": "viewport",
+              "text-opacity": 1,
+            },
+          });
+        }
+
+        if (!map.getLayer(BOUNDARY_LABEL_LAYER_ID)) {
+          map.addLayer({
+            id: BOUNDARY_LABEL_LAYER_ID,
+            type: "symbol",
+            source: BOUNDARY_LABEL_SOURCE_ID,
+            layout: {
+              "text-field": ["upcase", ["get", "featureName"]],
+              "text-font": ["DIN Pro Bold", "Arial Unicode MS Bold"],
+              "text-size": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                5,
+                12,
+                8,
+                14,
+                10,
+                16,
+              ],
+              "text-letter-spacing": 0.07,
+              "text-allow-overlap": true,
+              "text-ignore-placement": true,
+              "text-padding": 6,
+              "text-justify": "center",
+            },
+            paint: {
+              "text-color": "#1949ba",
+              "text-halo-color": "#f8fbff",
+              "text-halo-width": 2.6,
+              "text-halo-blur": 0.9,
+              "text-opacity": 1,
             },
           });
         }
@@ -659,6 +998,7 @@ export function PhilippinesMapPanel({
               name: targetChild.name,
               level: targetChild.level,
             });
+            setIsMunicipalitySelected(false);
             if (expectedChildLevel) {
               const resolvedPsgc = getPsgcAtLevel(
                 expectedChildLevel,
@@ -690,6 +1030,7 @@ export function PhilippinesMapPanel({
             if (!regionPsgc) {
               return;
             }
+            setIsMunicipalitySelected(false);
             debugMapSelection("COUNTRY_TO_REGION", {
               selectedRegionPsgc: regionPsgc,
             });
@@ -701,6 +1042,7 @@ export function PhilippinesMapPanel({
           } else if (currentDrillContext.level === "region") {
             const provinceCode = String(feature.properties.adm2_psgc ?? "");
             if (provinceCode) {
+              setIsMunicipalitySelected(false);
               setDrillContext({
                 level: "province",
                 selectedRegionPsgc: currentDrillContext.selectedRegionPsgc,
@@ -715,6 +1057,7 @@ export function PhilippinesMapPanel({
 
           const clickedId = feature.id;
           if (clickedId !== undefined && clickedId !== null) {
+            const hadPreviousSelection = selectedBoundaryIdsRef.current.length > 0;
             selectedBoundaryIdsRef.current.forEach((previousId) => {
               map.setFeatureState(
                 {
@@ -733,6 +1076,24 @@ export function PhilippinesMapPanel({
               },
               { selected: true },
             );
+
+            const shouldRaiseMunicipality = currentDrillContext.level === "province";
+            setIsMunicipalitySelected(shouldRaiseMunicipality);
+
+            if (
+              shouldRaiseMunicipality &&
+              feature.geometry &&
+              (feature.geometry.type === "Polygon" ||
+                feature.geometry.type === "MultiPolygon")
+            ) {
+              animateExtrusionUp(
+                feature.geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon,
+                String(feature.properties?.areaColor ?? "") || "#1f4fd1",
+                hadPreviousSelection && isMunicipalitySelectedRef.current,
+              );
+            } else {
+              animateExtrusionDown(true);
+            }
           }
 
           if (feature.geometry) {
@@ -747,6 +1108,7 @@ export function PhilippinesMapPanel({
               map.fitBounds(bounds, {
                 padding: getMapCameraPadding(),
                 maxZoom: 11,
+                pitch: currentDrillContext.level === "province" ? 46 : 0,
                 duration: 850,
               });
             }
@@ -843,8 +1205,10 @@ export function PhilippinesMapPanel({
 
         const clearSelection = () => {
           const currentArea = areaRef.current;
+          const currentDrillContext = drillContextRef.current;
           const rootAreaId = rootAreaIdRef.current;
           const shouldResetHierarchy = currentArea.id !== rootAreaId;
+          const hadPrimarySelection = selectedBoundaryIdsRef.current.length > 0;
           selectedBoundaryIdsRef.current.forEach((previousId) => {
             map.setFeatureState(
               {
@@ -882,6 +1246,56 @@ export function PhilippinesMapPanel({
           selectedBoundaryIdsRef.current = [];
           selectedContextBoundaryIdsRef.current = [];
           setSelectedMapLabel(null);
+          setIsMunicipalitySelected(false);
+          const labelSource = map.getSource(BOUNDARY_LABEL_SOURCE_ID) as
+            | mapboxgl.GeoJSONSource
+            | undefined;
+          labelSource?.setData({ type: "FeatureCollection", features: [] });
+          const extrusionSource = map.getSource(BOUNDARY_EXTRUSION_SOURCE_ID) as
+            | mapboxgl.GeoJSONSource
+            | undefined;
+          if (extrusionSource) {
+            animateExtrusionDown(true);
+          }
+          if (currentDrillContext.level === "province") {
+            if (!hadPrimarySelection) {
+              setDrillContext({
+                level: "region",
+                selectedRegionPsgc: currentDrillContext.selectedRegionPsgc,
+                selectedProvincePsgc: null,
+              });
+              map.easeTo({
+                zoom: Math.max(map.getZoom() - 0.8, 5.8),
+                pitch: 0,
+                padding: getMapCameraPadding(),
+                essential: true,
+                duration: 750,
+              });
+              debugMapSelection("SELECTION_CLEARED_TO_REGION", {
+                areaId: currentArea.id,
+                areaLevel: currentArea.level,
+                mapDrillLevel: currentDrillContext.level,
+                selectedRegionPsgc: currentDrillContext.selectedRegionPsgc,
+              });
+              return;
+            }
+            const currentZoom = map.getZoom();
+            map.easeTo({
+              zoom: Math.max(currentZoom - 0.9, 6.2),
+              pitch: 0,
+              padding: getMapCameraPadding(),
+              essential: true,
+              duration: 750,
+            });
+            debugMapSelection("SELECTION_CLEARED_MUNICIPALITY", {
+              areaId: currentArea.id,
+              areaLevel: currentArea.level,
+              mapDrillLevel: currentDrillContext.level,
+              zoomFrom: currentZoom,
+              zoomTo: Math.max(currentZoom - 0.9, 6.2),
+            });
+            return;
+          }
           setDrillContext({
             level: "country",
             selectedRegionPsgc: null,
@@ -894,6 +1308,7 @@ export function PhilippinesMapPanel({
             map.flyTo({
               center: [currentArea.mapView.lng, currentArea.mapView.lat],
               zoom: currentArea.mapView.zoom,
+              pitch: 0,
               padding: getMapCameraPadding(),
               essential: true,
               duration: 850,
@@ -931,12 +1346,51 @@ export function PhilippinesMapPanel({
               );
               hoveredBoundaryIdRef.current = null;
             }
+            const labelSource = map.getSource(BOUNDARY_LABEL_SOURCE_ID) as
+              | mapboxgl.GeoJSONSource
+              | undefined;
+            labelSource?.setData({ type: "FeatureCollection", features: [] });
             return;
           }
 
           const nextHoverId = topFeature.id;
           if (nextHoverId === undefined || nextHoverId === null) {
+            const labelSource = map.getSource(BOUNDARY_LABEL_SOURCE_ID) as
+              | mapboxgl.GeoJSONSource
+              | undefined;
+            labelSource?.setData({ type: "FeatureCollection", features: [] });
             return;
+          }
+
+          const labelSource = map.getSource(BOUNDARY_LABEL_SOURCE_ID) as
+            | mapboxgl.GeoJSONSource
+            | undefined;
+          const labelName = String(
+            (topFeature.properties as Record<string, unknown> | undefined)?.featureName ??
+              "",
+          );
+          if (labelSource && topFeature.geometry && labelName) {
+            const centerPoint = getGeometryCenterPoint(
+              topFeature.geometry as GeoJSON.Geometry,
+            );
+            if (!centerPoint) {
+              labelSource.setData({ type: "FeatureCollection", features: [] });
+              return;
+            }
+            labelSource.setData({
+              type: "FeatureCollection",
+              features: [
+                {
+                  type: "Feature",
+                  properties: {
+                    featureName: labelName,
+                  },
+                  geometry: centerPoint,
+                },
+              ],
+            });
+          } else {
+            labelSource?.setData({ type: "FeatureCollection", features: [] });
           }
 
           if (hoveredBoundaryIdRef.current !== nextHoverId) {
@@ -971,6 +1425,21 @@ export function PhilippinesMapPanel({
           }
 
           handlePrimaryBoundaryClick(feature);
+        });
+
+        map.on("mouseleave", () => {
+          map.getCanvas().style.cursor = "";
+          if (hoveredBoundaryIdRef.current !== null) {
+            map.setFeatureState(
+              { source: BOUNDARY_SOURCE_ID, id: hoveredBoundaryIdRef.current },
+              { hovered: false },
+            );
+            hoveredBoundaryIdRef.current = null;
+          }
+          const labelSource = map.getSource(BOUNDARY_LABEL_SOURCE_ID) as
+            | mapboxgl.GeoJSONSource
+            | undefined;
+          labelSource?.setData({ type: "FeatureCollection", features: [] });
         });
 
         handleEscToClear = (event: KeyboardEvent) => {
@@ -1028,6 +1497,14 @@ export function PhilippinesMapPanel({
       if (handleEscToClear) {
         window.removeEventListener("keydown", handleEscToClear);
       }
+      if (extrusionClearTimeoutRef.current !== null) {
+        window.clearTimeout(extrusionClearTimeoutRef.current);
+        extrusionClearTimeoutRef.current = null;
+      }
+      if (extrusionRiseTimeoutRef.current !== null) {
+        window.clearTimeout(extrusionRiseTimeoutRef.current);
+        extrusionRiseTimeoutRef.current = null;
+      }
       mapRef.current?.remove();
       mapRef.current = null;
       setMapReady(false);
@@ -1053,6 +1530,7 @@ export function PhilippinesMapPanel({
       map.flyTo({
         center: [activeArea.mapView.lng, activeArea.mapView.lat],
         zoom: activeArea.mapView.zoom,
+        pitch: isMunicipalitySelected ? 46 : 0,
         padding: getMapCameraPadding(),
         essential: true,
         duration: 1400,
@@ -1075,31 +1553,33 @@ export function PhilippinesMapPanel({
     const contextSource = map.getSource(CONTEXT_BOUNDARY_SOURCE_ID) as
       | mapboxgl.GeoJSONSource
       | undefined;
+    const labelSource = map.getSource(BOUNDARY_LABEL_SOURCE_ID) as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+    const extrusionSource = map.getSource(BOUNDARY_EXTRUSION_SOURCE_ID) as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+    labelSource?.setData({ type: "FeatureCollection", features: [] });
+    if (drillContext.level !== "province" || !isMunicipalitySelected) {
+      extrusionSource?.setData({ type: "FeatureCollection", features: [] });
+    }
 
     if (!source) {
       return;
     }
 
     if (drillContext.level === "country") {
-      Promise.all(
-        REGION_BOUNDARY_GEOJSON_PATHS.map((path) =>
-          fetch(path).then((response) => {
-            if (!response.ok) {
-              throw new Error(`Unable to load boundary data from ${path}`);
-            }
-            return response.json() as Promise<unknown>;
-          }),
-        ),
-      )
-        .then((datasets) => {
-          const features = datasets.flatMap(
-            (dataset) => normalizeGeoJson(dataset).features,
-          );
+      fetch("/geojson/country/country.0.01.json")
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error("Unable to load boundary data from /geojson/country/country.0.01.json");
+          }
+          return response.json() as Promise<unknown>;
+        })
+        .then((data) => {
+          const normalized = normalizeGeoJson(data);
           selectedBoundaryIdsRef.current = [];
-          source.setData({
-            type: "FeatureCollection",
-            features,
-          } as GeoJSON.FeatureCollection);
+          source.setData(normalized as unknown as GeoJSON.FeatureCollection);
         })
         .catch((error) => {
           setMapError((error as Error).message);
@@ -1115,10 +1595,35 @@ export function PhilippinesMapPanel({
         })
         .then((data) => {
           const normalized = normalizeGeoJson(data);
-          source.setData(normalized as unknown as GeoJSON.FeatureCollection);
+          const styledCollection =
+            drillContext.level === "province"
+              ? applyMunicipalityColors(normalized)
+              : normalized;
+          source.setData(styledCollection as unknown as GeoJSON.FeatureCollection);
+
+          // Re-apply feature-state after source data refresh so hover/selection
+          // (including 3D extrusion on selected municipality) persists.
+          selectedBoundaryIdsRef.current.forEach((selectedId) => {
+            map.setFeatureState(
+              {
+                source: BOUNDARY_SOURCE_ID,
+                id: selectedId,
+              },
+              { selected: true },
+            );
+          });
+          if (hoveredBoundaryIdRef.current !== null) {
+            map.setFeatureState(
+              {
+                source: BOUNDARY_SOURCE_ID,
+                id: hoveredBoundaryIdRef.current,
+              },
+              { hovered: true },
+            );
+          }
 
           const expectedChildLevel = getExpectedChildLevelByDrillLevel(drillContext.level);
-          normalized.features.forEach((feature) => {
+          styledCollection.features.forEach((feature) => {
             const matchingChild = (activeArea.children ?? []).find(
               (child) =>
                 child.level === expectedChildLevel &&
@@ -1154,6 +1659,27 @@ export function PhilippinesMapPanel({
       contextSource.setData({ type: "FeatureCollection", features: [] });
     }
   }, [activeArea, mapReady, drillContext]);
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) {
+      return;
+    }
+
+    if (!isMunicipalitySelected) {
+      mapRef.current.easeTo({
+        pitch: 0,
+        duration: 650,
+        essential: true,
+      });
+      return;
+    }
+
+    mapRef.current.easeTo({
+      pitch: 46,
+      duration: 650,
+      essential: true,
+    });
+  }, [isMunicipalitySelected, mapReady]);
 
   const hasToken = Boolean(MAPBOX_TOKEN);
   const displayedMapLabel = selectedMapLabel ?? {
@@ -1231,6 +1757,7 @@ export function PhilippinesMapPanel({
             : mapError}
         </div>
       ) : null}
+
     </section>
   );
 }
