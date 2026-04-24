@@ -22,24 +22,32 @@ const PH_MASK_SOURCE_ID = "tesda-ph-mask";
 const PH_MASK_LAYER_ID = "tesda-ph-mask-fill";
 
 const REGION_BOUNDARY_GEOJSON_PATHS = [
-  "/geojson/regions/provdists-region-100000000.0.001.json",
-  "/geojson/regions/provdists-region-200000000.0.001.json",
-  "/geojson/regions/provdists-region-300000000.0.001.json",
-  "/geojson/regions/provdists-region-400000000.0.001.json",
-  "/geojson/regions/provdists-region-500000000.0.001.json",
-  "/geojson/regions/provdists-region-600000000.0.001.json",
-  "/geojson/regions/provdists-region-700000000.0.001.json",
-  "/geojson/regions/provdists-region-800000000.0.001.json",
-  "/geojson/regions/provdists-region-900000000.0.001.json",
-  "/geojson/regions/provdists-region-1000000000.0.001.json",
-  "/geojson/regions/provdists-region-1100000000.0.001.json",
-  "/geojson/regions/provdists-region-1200000000.0.001.json",
-  "/geojson/regions/provdists-region-1300000000.0.001.json",
-  "/geojson/regions/provdists-region-1400000000.0.001.json",
-  "/geojson/regions/provdists-region-1600000000.0.001.json",
-  "/geojson/regions/provdists-region-1700000000.0.001.json",
-  "/geojson/regions/provdists-region-1900000000.0.001.json",
+  "/geojson/regions/provdists-region-100000000.0.01.json",
+  "/geojson/regions/provdists-region-200000000.0.01.json",
+  "/geojson/regions/provdists-region-300000000.0.01.json",
+  "/geojson/regions/provdists-region-400000000.0.01.json",
+  "/geojson/regions/provdists-region-500000000.0.01.json",
+  "/geojson/regions/provdists-region-600000000.0.01.json",
+  "/geojson/regions/provdists-region-700000000.0.01.json",
+  "/geojson/regions/provdists-region-800000000.0.01.json",
+  "/geojson/regions/provdists-region-900000000.0.01.json",
+  "/geojson/regions/provdists-region-1000000000.0.01.json",
+  "/geojson/regions/provdists-region-1100000000.0.01.json",
+  "/geojson/regions/provdists-region-1200000000.0.01.json",
+  "/geojson/regions/provdists-region-1300000000.0.01.json",
+  "/geojson/regions/provdists-region-1400000000.0.01.json",
+  "/geojson/regions/provdists-region-1600000000.0.01.json",
+  "/geojson/regions/provdists-region-1700000000.0.01.json",
+  "/geojson/regions/provdists-region-1900000000.0.01.json",
 ] as const;
+
+type DrillLevel = "country" | "region" | "province";
+
+type DrillContext = {
+  level: DrillLevel;
+  selectedRegionPsgc: string | null;
+  selectedProvincePsgc: string | null;
+};
 
 type GeoJsonFeature = {
   type: "Feature";
@@ -298,40 +306,26 @@ function normalizeGeoJson(raw: unknown): GeoJsonFeatureCollection {
   };
 }
 
-function getBoundaryGeoJsonPath(
-  activeArea: AreaNode,
-  selectedCountryRegionPsgc: string | null,
-  resolvedPsgcByAreaId: Record<string, string>,
-) {
-  if (activeArea.level === "country") {
-    if (selectedCountryRegionPsgc) {
-      return `/geojson/regions/provdists-region-${selectedCountryRegionPsgc}.0.001.json`;
-    }
-    return "/geojson/country/country.json";
+function getBoundaryGeoJsonPath(drillContext: DrillContext) {
+  if (drillContext.level === "region") {
+    return drillContext.selectedRegionPsgc
+      ? `/geojson/regions/provdists-region-${drillContext.selectedRegionPsgc}.0.01.json`
+      : null;
   }
 
-  if (activeArea.level === "region") {
-    const psgc = resolvedPsgcByAreaId[activeArea.id] ?? selectedCountryRegionPsgc;
-    return psgc ? `/geojson/regions/provdists-region-${psgc}.0.001.json` : null;
-  }
-
-  if (activeArea.level === "province") {
-    const psgc = resolvedPsgcByAreaId[activeArea.id];
-    return psgc ? `/geojson/province/municities-provdist-${psgc}.0.001.json` : null;
+  if (drillContext.level === "province") {
+    return drillContext.selectedProvincePsgc
+      ? `/geojson/provdists/municities-provdist-${drillContext.selectedProvincePsgc}.0.01.json`
+      : null;
   }
 
   return null;
 }
 
-function getContextBoundaryGeoJsonPath(
-  activeArea: AreaNode,
-  selectedProvincePsgc: string | null,
-) {
-  if (activeArea.level === "region" && selectedProvincePsgc) {
-    return `/geojson/province/municities-provdist-${selectedProvincePsgc}.0.001.json`;
-  }
-
-  return null;
+function getExpectedChildLevelByDrillLevel(level: DrillLevel): "region" | "province" | "city" {
+  if (level === "country") return "region";
+  if (level === "region") return "province";
+  return "city";
 }
 
 function collectLngLatPairs(geometry: GeoJSON.Geometry): Array<[number, number]> {
@@ -379,15 +373,12 @@ export function PhilippinesMapPanel({
   const hoveredBoundaryIdRef = useRef<string | number | null>(null);
   const hoveredContextBoundaryIdRef = useRef<string | number | null>(null);
   const resolvedPsgcByAreaIdRef = useRef<Record<string, string>>({});
-  const [drillContext, setDrillContext] = useState<{
-    areaId: string;
-    selectedProvincePsgc: string | null;
-    selectedCountryRegionPsgc: string | null;
-  }>({
-    areaId: activeArea.id,
+  const [drillContext, setDrillContext] = useState<DrillContext>({
+    level: "country",
+    selectedRegionPsgc: null,
     selectedProvincePsgc: null,
-    selectedCountryRegionPsgc: null,
   });
+  const drillContextRef = useRef<DrillContext>(drillContext);
   const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
   const [selectedMapLabel, setSelectedMapLabel] = useState<{
@@ -412,6 +403,21 @@ export function PhilippinesMapPanel({
   }, [activeArea]);
 
   useEffect(() => {
+    drillContextRef.current = drillContext;
+  }, [drillContext]);
+
+  useEffect(() => {
+    if (activeArea.level === "country") {
+      setDrillContext({
+        level: "country",
+        selectedRegionPsgc: null,
+        selectedProvincePsgc: null,
+      });
+      setSelectedMapLabel(null);
+    }
+  }, [activeArea.id, activeArea.level]);
+
+  useEffect(() => {
     if (!MAPBOX_TOKEN || !mapContainerRef.current || mapRef.current) {
       return;
     }
@@ -433,13 +439,13 @@ export function PhilippinesMapPanel({
         style: "mapbox://styles/mapbox/light-v11",
         center: [initialViewRef.current.lng, initialViewRef.current.lat],
         zoom: initialViewRef.current.zoom,
-        padding: getMapCameraPadding(),
         minZoom: 3.5,
         attributionControl: true,
         pitchWithRotate: false,
         dragRotate: false,
         renderWorldCopies: false,
       });
+      map.setPadding(getMapCameraPadding());
       map.setProjection("mercator");
 
       map.addControl(
@@ -610,22 +616,24 @@ export function PhilippinesMapPanel({
           if (!feature || !feature.properties) return;
 
           const currentArea = areaRef.current;
-          const expectedChildLevel = getExpectedChildLevel(currentArea.level);
+          const currentDrillContext = drillContextRef.current;
+          const expectedChildLevel = getExpectedChildLevelByDrillLevel(currentDrillContext.level);
           const featureName = String(feature.properties.featureName ?? "");
           const featureCode = String(feature.properties.featureCode ?? "");
           const regionPsgc = String(feature.properties.adm1_psgc ?? "");
           const provincePsgc = String(feature.properties.adm2_psgc ?? "");
           const cityPsgc = String(feature.properties.adm3_psgc ?? "");
-          const clickedLabelName = String(feature.properties.featureName ?? getFeatureName(feature.properties));
-          const clickedLabelLevel = (expectedChildLevel ?? currentArea.level) as AreaNode["level"];
+          const clickedLabelName = String(
+            feature.properties.featureName ?? getFeatureName(feature.properties),
+          );
+          const clickedLabelLevel = expectedChildLevel as AreaNode["level"];
 
           const targetChild = (currentArea.children ?? []).find((child) =>
-            expectedChildLevel &&
             child.level === expectedChildLevel &&
             matchesAreaByFeature(
               child,
               expectedChildLevel,
-              feature.properties,
+              feature.properties ?? undefined,
               resolvedPsgcByAreaIdRef.current,
             ),
           );
@@ -633,6 +641,7 @@ export function PhilippinesMapPanel({
           debugMapSelection("PRIMARY_CLICK", {
             currentAreaId: currentArea.id,
             currentAreaLevel: currentArea.level,
+            mapDrillLevel: currentDrillContext.level,
             expectedChildLevel,
             featureId: feature.id ?? null,
             featureName,
@@ -651,7 +660,10 @@ export function PhilippinesMapPanel({
               level: targetChild.level,
             });
             if (expectedChildLevel) {
-              const resolvedPsgc = getPsgcAtLevel(expectedChildLevel, feature.properties);
+              const resolvedPsgc = getPsgcAtLevel(
+                expectedChildLevel,
+                feature.properties ?? undefined,
+              );
               if (resolvedPsgc) {
                 resolvedPsgcByAreaIdRef.current[targetChild.id] = resolvedPsgc;
                 debugMapSelection("RESOLVED_PSGC_SET", {
@@ -674,32 +686,29 @@ export function PhilippinesMapPanel({
             });
           }
 
-          if (currentArea.level === "region") {
+          if (currentDrillContext.level === "country") {
+            if (!regionPsgc) {
+              return;
+            }
+            debugMapSelection("COUNTRY_TO_REGION", {
+              selectedRegionPsgc: regionPsgc,
+            });
+            setDrillContext({
+              level: "region",
+              selectedRegionPsgc: regionPsgc,
+              selectedProvincePsgc: null,
+            });
+          } else if (currentDrillContext.level === "region") {
             const provinceCode = String(feature.properties.adm2_psgc ?? "");
             if (provinceCode) {
-              debugMapSelection("REGION_DRILL_CONTEXT_SET", {
-                areaId: currentArea.id,
+              setDrillContext({
+                level: "province",
+                selectedRegionPsgc: currentDrillContext.selectedRegionPsgc,
                 selectedProvincePsgc: provinceCode,
               });
-              setDrillContext({
-                areaId: currentArea.id,
+              debugMapSelection("REGION_TO_PROVINCE", {
+                selectedRegionPsgc: currentDrillContext.selectedRegionPsgc,
                 selectedProvincePsgc: provinceCode,
-                selectedCountryRegionPsgc: null,
-              });
-            }
-          }
-
-          if (currentArea.level === "country") {
-            const regionCode = String(feature.properties.adm1_psgc ?? "");
-            if (regionCode) {
-              debugMapSelection("COUNTRY_DRILL_CONTEXT_SET", {
-                areaId: currentArea.id,
-                selectedCountryRegionPsgc: regionCode,
-              });
-              setDrillContext({
-                areaId: currentArea.id,
-                selectedProvincePsgc: null,
-                selectedCountryRegionPsgc: regionCode,
               });
             }
           }
@@ -874,9 +883,9 @@ export function PhilippinesMapPanel({
           selectedContextBoundaryIdsRef.current = [];
           setSelectedMapLabel(null);
           setDrillContext({
-            areaId: currentArea.id,
+            level: "country",
+            selectedRegionPsgc: null,
             selectedProvincePsgc: null,
-            selectedCountryRegionPsgc: null,
           });
           if (shouldResetHierarchy) {
             interactionRef.current();
@@ -893,22 +902,14 @@ export function PhilippinesMapPanel({
           debugMapSelection("SELECTION_CLEARED", {
             areaId: currentArea.id,
             areaLevel: currentArea.level,
+            mapDrillLevel: drillContextRef.current.level,
             resetToRoot: shouldResetHierarchy,
             rootAreaId,
           });
         };
 
         map.on("mousemove", (event) => {
-          const currentArea = areaRef.current;
-          const interactiveLayers =
-            currentArea.level === "region"
-              ? [
-                  CONTEXT_BOUNDARY_FILL_LAYER_ID,
-                  CONTEXT_BOUNDARY_LINE_LAYER_ID,
-                  BOUNDARY_FILL_LAYER_ID,
-                  BOUNDARY_LINE_LAYER_ID,
-                ]
-              : [BOUNDARY_FILL_LAYER_ID, BOUNDARY_LINE_LAYER_ID];
+          const interactiveLayers = [BOUNDARY_FILL_LAYER_ID, BOUNDARY_LINE_LAYER_ID];
           const existingLayers = interactiveLayers.filter((layerId) =>
             Boolean(map.getLayer(layerId)),
           );
@@ -930,39 +931,7 @@ export function PhilippinesMapPanel({
               );
               hoveredBoundaryIdRef.current = null;
             }
-            if (hoveredContextBoundaryIdRef.current !== null) {
-              map.setFeatureState(
-                { source: CONTEXT_BOUNDARY_SOURCE_ID, id: hoveredContextBoundaryIdRef.current },
-                { hovered: false },
-              );
-              hoveredContextBoundaryIdRef.current = null;
-            }
             return;
-          }
-
-          const isContextFeature =
-            topFeature.layer.id === CONTEXT_BOUNDARY_FILL_LAYER_ID ||
-            topFeature.layer.id === CONTEXT_BOUNDARY_LINE_LAYER_ID;
-
-          const hoverSourceId = isContextFeature
-            ? CONTEXT_BOUNDARY_SOURCE_ID
-            : BOUNDARY_SOURCE_ID;
-          const hoverRef = isContextFeature
-            ? hoveredContextBoundaryIdRef
-            : hoveredBoundaryIdRef;
-          const otherRef = isContextFeature
-            ? hoveredBoundaryIdRef
-            : hoveredContextBoundaryIdRef;
-          const otherSourceId = isContextFeature
-            ? BOUNDARY_SOURCE_ID
-            : CONTEXT_BOUNDARY_SOURCE_ID;
-
-          if (otherRef.current !== null) {
-            map.setFeatureState(
-              { source: otherSourceId, id: otherRef.current },
-              { hovered: false },
-            );
-            otherRef.current = null;
           }
 
           const nextHoverId = topFeature.id;
@@ -970,32 +939,23 @@ export function PhilippinesMapPanel({
             return;
           }
 
-          if (hoverRef.current !== nextHoverId) {
-            if (hoverRef.current !== null) {
+          if (hoveredBoundaryIdRef.current !== nextHoverId) {
+            if (hoveredBoundaryIdRef.current !== null) {
               map.setFeatureState(
-                { source: hoverSourceId, id: hoverRef.current },
+                { source: BOUNDARY_SOURCE_ID, id: hoveredBoundaryIdRef.current },
                 { hovered: false },
               );
             }
             map.setFeatureState(
-              { source: hoverSourceId, id: nextHoverId },
+              { source: BOUNDARY_SOURCE_ID, id: nextHoverId },
               { hovered: true },
             );
-            hoverRef.current = nextHoverId;
+            hoveredBoundaryIdRef.current = nextHoverId;
           }
         });
 
         map.on("click", (event) => {
-          const currentArea = areaRef.current;
-          const interactiveLayers =
-            currentArea.level === "region"
-              ? [
-                  CONTEXT_BOUNDARY_FILL_LAYER_ID,
-                  CONTEXT_BOUNDARY_LINE_LAYER_ID,
-                  BOUNDARY_FILL_LAYER_ID,
-                  BOUNDARY_LINE_LAYER_ID,
-                ]
-              : [BOUNDARY_FILL_LAYER_ID, BOUNDARY_LINE_LAYER_ID];
+          const interactiveLayers = [BOUNDARY_FILL_LAYER_ID, BOUNDARY_LINE_LAYER_ID];
           const existingLayers = interactiveLayers.filter((layerId) =>
             Boolean(map.getLayer(layerId)),
           );
@@ -1010,14 +970,6 @@ export function PhilippinesMapPanel({
             return;
           }
 
-          if (
-            feature.layer.id === CONTEXT_BOUNDARY_FILL_LAYER_ID ||
-            feature.layer.id === CONTEXT_BOUNDARY_LINE_LAYER_ID
-          ) {
-            handleContextBoundaryClick(feature);
-            return;
-          }
-
           handlePrimaryBoundaryClick(feature);
         });
 
@@ -1027,7 +979,7 @@ export function PhilippinesMapPanel({
         };
         window.addEventListener("keydown", handleEscToClear);
 
-        fetch("/geojson/country/country.json")
+        fetch("/geojson/country/country.0.01.json")
           .then((response) => {
             if (!response.ok) {
               throw new Error("Unable to load Philippines mask geometry.");
@@ -1093,7 +1045,7 @@ export function PhilippinesMapPanel({
       map.setLayoutProperty(
         CONTEXT_BOUNDARY_FILL_LAYER_ID,
         "visibility",
-        activeArea.level === "region" ? "visible" : "none",
+        "none",
       );
     }
 
@@ -1108,21 +1060,14 @@ export function PhilippinesMapPanel({
       lastCameraAreaIdRef.current = activeArea.id;
     }
 
-    const selectedCountryRegionPsgc =
-      activeArea.level === "country" && drillContext.areaId === activeArea.id
-        ? drillContext.selectedCountryRegionPsgc
-        : null;
-    const boundaryPath = getBoundaryGeoJsonPath(
-      activeArea,
-      selectedCountryRegionPsgc,
-      resolvedPsgcByAreaIdRef.current,
-    );
+    const boundaryPath = getBoundaryGeoJsonPath(drillContext);
     debugMapSelection("BOUNDARY_PATH_RESOLVED", {
       activeAreaId: activeArea.id,
       activeAreaLevel: activeArea.level,
-      selectedCountryRegionPsgc,
+      mapDrillLevel: drillContext.level,
+      selectedRegionPsgc: drillContext.selectedRegionPsgc,
+      selectedProvincePsgc: drillContext.selectedProvincePsgc,
       boundaryPath,
-      resolvedPsgcForArea: resolvedPsgcByAreaIdRef.current[activeArea.id] ?? null,
     });
     const source = map.getSource(BOUNDARY_SOURCE_ID) as
       | mapboxgl.GeoJSONSource
@@ -1131,100 +1076,11 @@ export function PhilippinesMapPanel({
       | mapboxgl.GeoJSONSource
       | undefined;
 
-    if (!boundaryPath || !source) {
+    if (!source) {
       return;
     }
 
-    const selectedName = safeName(activeArea.name);
-    const selectedCode = activeArea.code;
-
-    fetch(boundaryPath)
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Unable to load boundary data from ${boundaryPath}`);
-        }
-
-        return response.json() as Promise<unknown>;
-      })
-      .then((data) => {
-        const normalized = normalizeGeoJson(data);
-        source.setData(normalized as unknown as GeoJSON.FeatureCollection);
-
-        normalized.features.forEach((feature) => {
-          const id = feature.id;
-          if (id === undefined || id === null) return;
-
-          const properties = feature.properties;
-          const currentName = safeName(properties?.featureName);
-          const currentCode = String(properties?.featureCode ?? "");
-          const isSelected = currentName === selectedName || currentCode === selectedCode;
-
-          map.setFeatureState(
-            {
-              source: BOUNDARY_SOURCE_ID,
-              id,
-            },
-            { selected: isSelected },
-          );
-        });
-
-        const expectedChildLevel = getExpectedChildLevel(activeArea.level);
-        if (expectedChildLevel) {
-          normalized.features.forEach((feature) => {
-            const matchingChild = (activeArea.children ?? []).find(
-              (child) =>
-                child.level === expectedChildLevel &&
-                matchesAreaByFeature(
-                  child,
-                  expectedChildLevel,
-                  feature.properties,
-                  resolvedPsgcByAreaIdRef.current,
-                ),
-            );
-            if (!matchingChild) {
-              return;
-            }
-
-            const resolvedPsgc = getPsgcAtLevel(expectedChildLevel, feature.properties);
-            if (resolvedPsgc) {
-              resolvedPsgcByAreaIdRef.current[matchingChild.id] = resolvedPsgc;
-              debugMapSelection("BOUNDARY_MATCH_RESOLVED_PSGC", {
-                activeAreaId: activeArea.id,
-                activeAreaLevel: activeArea.level,
-                matchedChildId: matchingChild.id,
-                matchedChildName: matchingChild.name,
-                matchedChildLevel: matchingChild.level,
-                expectedChildLevel,
-                resolvedPsgc,
-              });
-            }
-          });
-        }
-
-        selectedBoundaryIdsRef.current = normalized.features
-          .filter((feature) => {
-            const properties = feature.properties;
-            const currentName = safeName(properties?.featureName);
-            const currentCode = String(properties?.featureCode ?? "");
-            return currentName === selectedName || currentCode === selectedCode;
-          })
-          .map((feature) => feature.id)
-          .filter((id): id is string | number => id !== undefined && id !== null);
-      })
-      .catch((error) => {
-        setMapError((error as Error).message);
-      });
-
-    const selectedProvincePsgc =
-      activeArea.level === "region" && drillContext.areaId === activeArea.id
-        ? drillContext.selectedProvincePsgc
-        : null;
-    const contextPath = getContextBoundaryGeoJsonPath(activeArea, selectedProvincePsgc);
-    if (!contextSource) {
-      return;
-    }
-
-    if (activeArea.level === "country") {
+    if (drillContext.level === "country") {
       Promise.all(
         REGION_BOUNDARY_GEOJSON_PATHS.map((path) =>
           fetch(path).then((response) => {
@@ -1239,8 +1095,8 @@ export function PhilippinesMapPanel({
           const features = datasets.flatMap(
             (dataset) => normalizeGeoJson(dataset).features,
           );
-          selectedContextBoundaryIdsRef.current = [];
-          contextSource.setData({
+          selectedBoundaryIdsRef.current = [];
+          source.setData({
             type: "FeatureCollection",
             features,
           } as GeoJSON.FeatureCollection);
@@ -1248,31 +1104,56 @@ export function PhilippinesMapPanel({
         .catch((error) => {
           setMapError((error as Error).message);
         });
-      return;
+    } else if (boundaryPath) {
+      fetch(boundaryPath)
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error(`Unable to load boundary data from ${boundaryPath}`);
+          }
+
+          return response.json() as Promise<unknown>;
+        })
+        .then((data) => {
+          const normalized = normalizeGeoJson(data);
+          source.setData(normalized as unknown as GeoJSON.FeatureCollection);
+
+          const expectedChildLevel = getExpectedChildLevelByDrillLevel(drillContext.level);
+          normalized.features.forEach((feature) => {
+            const matchingChild = (activeArea.children ?? []).find(
+              (child) =>
+                child.level === expectedChildLevel &&
+                matchesAreaByFeature(
+                  child,
+                  expectedChildLevel,
+                  feature.properties ?? undefined,
+                  resolvedPsgcByAreaIdRef.current,
+                ),
+            );
+            if (!matchingChild) {
+              return;
+            }
+
+            const resolvedPsgc = getPsgcAtLevel(
+              expectedChildLevel,
+              feature.properties ?? undefined,
+            );
+            if (resolvedPsgc) {
+              resolvedPsgcByAreaIdRef.current[matchingChild.id] = resolvedPsgc;
+            }
+          });
+        })
+        .catch((error) => {
+          setMapError((error as Error).message);
+        });
+    } else {
+      source.setData({ type: "FeatureCollection", features: [] });
     }
 
-    if (!contextPath) {
+    if (contextSource) {
       selectedContextBoundaryIdsRef.current = [];
       contextSource.setData({ type: "FeatureCollection", features: [] });
-      return;
     }
-
-    fetch(contextPath)
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Unable to load boundary data from ${contextPath}`);
-        }
-        return response.json() as Promise<unknown>;
-      })
-      .then((data) => {
-        const normalized = normalizeGeoJson(data);
-        selectedContextBoundaryIdsRef.current = [];
-        contextSource.setData(normalized as unknown as GeoJSON.FeatureCollection);
-      })
-      .catch((error) => {
-        setMapError((error as Error).message);
-      });
-  }, [activeArea, mapReady, onInteractionStart, onSelect, drillContext]);
+  }, [activeArea, mapReady, drillContext]);
 
   const hasToken = Boolean(MAPBOX_TOKEN);
   const displayedMapLabel = selectedMapLabel ?? {
