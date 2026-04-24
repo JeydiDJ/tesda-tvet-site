@@ -262,6 +262,13 @@ function formatAreaLevel(level: AreaNode["level"]) {
   return level.charAt(0).toUpperCase() + level.slice(1);
 }
 
+function getOverviewHeading(level: AreaNode["level"]) {
+  if (level === "country") return "TVET National Overview";
+  if (level === "region") return "TVET Regional Overview";
+  if (level === "province") return "TVET Provincial Overview";
+  return "TVET Local Overview";
+}
+
 function getOuterRingsFromGeometry(geometry: GeoJSON.Geometry): LngLatPair[][] {
   if (geometry.type === "Polygon") {
     return geometry.coordinates.length > 0 ? [geometry.coordinates[0] as LngLatPair[]] : [];
@@ -477,6 +484,7 @@ export function PhilippinesMapPanel({
     level: AreaNode["level"];
   } | null>(null);
   const [isMunicipalitySelected, setIsMunicipalitySelected] = useState(false);
+  const [layerFeatureCount, setLayerFeatureCount] = useState<number | null>(null);
   const isMunicipalitySelectedRef = useRef(false);
 
   useEffect(() => {
@@ -544,13 +552,6 @@ export function PhilippinesMapPanel({
       });
       map.setPadding(getMapCameraPadding());
       map.setProjection("mercator");
-
-      map.addControl(
-        new mapboxgl.NavigationControl({
-          visualizePitch: false,
-        }),
-        "bottom-right",
-      );
 
       map.on("load", () => {
         if (disposed) return;
@@ -1583,6 +1584,7 @@ export function PhilippinesMapPanel({
         .then((data) => {
           const normalized = normalizeGeoJson(data);
           selectedBoundaryIdsRef.current = [];
+          setLayerFeatureCount(normalized.features.length);
           boundaryFeaturesByIdRef.current = new Map(
             normalized.features
               .filter((item): item is GeoJsonFeature & { id: string | number } =>
@@ -1610,6 +1612,7 @@ export function PhilippinesMapPanel({
             drillContext.level === "province"
               ? applyMunicipalityColors(normalized)
               : normalized;
+          setLayerFeatureCount(styledCollection.features.length);
           boundaryFeaturesByIdRef.current = new Map(
             styledCollection.features
               .filter((item): item is GeoJsonFeature & { id: string | number } =>
@@ -1669,6 +1672,7 @@ export function PhilippinesMapPanel({
           setMapError((error as Error).message);
         });
     } else {
+      setLayerFeatureCount(null);
       boundaryFeaturesByIdRef.current = new Map();
       source.setData({ type: "FeatureCollection", features: [] });
     }
@@ -1705,6 +1709,24 @@ export function PhilippinesMapPanel({
     name: activeArea.name,
     level: activeArea.level,
   };
+  const displayHeading = getOverviewHeading(displayedMapLabel.level);
+  const displayHeroLabel =
+    displayedMapLabel.level === "country"
+      ? activeArea.heroLabel
+      : `${formatAreaLevel(displayedMapLabel.level)} focus`;
+  const layerCountLabel =
+    drillContext.level === "country"
+      ? "Regions"
+      : drillContext.level === "region"
+        ? "Provinces"
+        : "Municipalities";
+  const layerCountValue =
+    layerFeatureCount ??
+    (drillContext.level === "country"
+      ? 17
+      : drillContext.level === "region"
+        ? activeArea.metrics.provinces
+        : activeArea.metrics.municipalities);
 
   return (
     <section className="relative h-[100dvh] overflow-hidden bg-[#edf5ff]">
@@ -1721,20 +1743,20 @@ export function PhilippinesMapPanel({
             </div>
 
             <h1 className="mt-3 max-w-[640px] font-display text-[clamp(2.1rem,4.2vw,3.8rem)] font-extrabold uppercase leading-[0.9] tracking-[-0.07em] text-[var(--tesda-blue)]">
-              TVET National Overview
+              {displayHeading}
             </h1>
 
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
               <p className="text-[clamp(0.95rem,1.2vw,1.15rem)] font-bold text-slate-700">
-                {activeArea.name} interactive map data
+                {displayedMapLabel.name} interactive map data
               </p>
               <p className="font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[#879bbd] sm:text-[11px]">
-                {activeArea.heroLabel} • real-time analysis • 2026
+                {displayHeroLabel} | real-time analysis | 2026
               </p>
             </div>
 
             <div className="mt-4 grid grid-cols-2 gap-2.5 lg:grid-cols-3">
-              <MetricCard label="Regions" value={activeArea.level === "country" ? 17 : activeArea.metrics.provinces} emphasis />
+              <MetricCard label={layerCountLabel} value={layerCountValue} emphasis />
               <MetricCard label="Provinces" value={activeArea.metrics.provinces} />
               <MetricCard label="Districts" value={253} />
               <MetricCard label="Cities" value={activeArea.metrics.cities} />
@@ -1805,3 +1827,4 @@ function MetricCard({
     </article>
   );
 }
+
