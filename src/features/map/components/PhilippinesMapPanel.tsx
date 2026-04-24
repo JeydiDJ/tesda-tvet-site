@@ -461,6 +461,7 @@ export function PhilippinesMapPanel({
   const hoveredBoundaryIdRef = useRef<string | number | null>(null);
   const hoveredContextBoundaryIdRef = useRef<string | number | null>(null);
   const resolvedPsgcByAreaIdRef = useRef<Record<string, string>>({});
+  const boundaryFeaturesByIdRef = useRef<Map<string | number, GeoJsonFeature>>(new Map());
   const extrusionClearTimeoutRef = useRef<number | null>(null);
   const extrusionRiseTimeoutRef = useRef<number | null>(null);
   const [drillContext, setDrillContext] = useState<DrillContext>({
@@ -1080,14 +1081,17 @@ export function PhilippinesMapPanel({
             const shouldRaiseMunicipality = currentDrillContext.level === "province";
             setIsMunicipalitySelected(shouldRaiseMunicipality);
 
+            const fullFeatureGeometry =
+              boundaryFeaturesByIdRef.current.get(clickedId)?.geometry ??
+              (feature.geometry as GeoJSON.Geometry | undefined);
             if (
               shouldRaiseMunicipality &&
-              feature.geometry &&
-              (feature.geometry.type === "Polygon" ||
-                feature.geometry.type === "MultiPolygon")
+              fullFeatureGeometry &&
+              (fullFeatureGeometry.type === "Polygon" ||
+                fullFeatureGeometry.type === "MultiPolygon")
             ) {
               animateExtrusionUp(
-                feature.geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon,
+                fullFeatureGeometry as GeoJSON.Polygon | GeoJSON.MultiPolygon,
                 String(feature.properties?.areaColor ?? "") || "#1f4fd1",
                 hadPreviousSelection && isMunicipalitySelectedRef.current,
               );
@@ -1579,6 +1583,13 @@ export function PhilippinesMapPanel({
         .then((data) => {
           const normalized = normalizeGeoJson(data);
           selectedBoundaryIdsRef.current = [];
+          boundaryFeaturesByIdRef.current = new Map(
+            normalized.features
+              .filter((item): item is GeoJsonFeature & { id: string | number } =>
+                item.id !== undefined && item.id !== null,
+              )
+              .map((item) => [item.id, item]),
+          );
           source.setData(normalized as unknown as GeoJSON.FeatureCollection);
         })
         .catch((error) => {
@@ -1599,6 +1610,13 @@ export function PhilippinesMapPanel({
             drillContext.level === "province"
               ? applyMunicipalityColors(normalized)
               : normalized;
+          boundaryFeaturesByIdRef.current = new Map(
+            styledCollection.features
+              .filter((item): item is GeoJsonFeature & { id: string | number } =>
+                item.id !== undefined && item.id !== null,
+              )
+              .map((item) => [item.id, item]),
+          );
           source.setData(styledCollection as unknown as GeoJSON.FeatureCollection);
 
           // Re-apply feature-state after source data refresh so hover/selection
@@ -1651,6 +1669,7 @@ export function PhilippinesMapPanel({
           setMapError((error as Error).message);
         });
     } else {
+      boundaryFeaturesByIdRef.current = new Map();
       source.setData({ type: "FeatureCollection", features: [] });
     }
 
