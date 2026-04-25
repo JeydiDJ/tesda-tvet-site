@@ -26,8 +26,8 @@ const CONTEXT_BOUNDARY_FILL_LAYER_ID = "tesda-context-boundary-fill";
 const CONTEXT_BOUNDARY_LINE_LAYER_ID = "tesda-context-boundary-line";
 const PH_MASK_SOURCE_ID = "tesda-ph-mask";
 const PH_MASK_LAYER_ID = "tesda-ph-mask-fill";
-const MUNICIPALITY_EXTRUSION_HEIGHT = 4200;
-const MUNICIPALITY_EXTRUSION_OPACITY = 0.76;
+const MUNICIPALITY_EXTRUSION_HEIGHT = 3000;
+const MUNICIPALITY_EXTRUSION_OPACITY = 0.90;
 const MUNICIPALITY_EXTRUSION_RISE_DURATION_MS = 260;
 const MUNICIPALITY_EXTRUSION_DROP_DURATION_MS = 180;
 
@@ -1635,7 +1635,7 @@ export function PhilippinesMapPanel({
 
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
               <p className="text-[clamp(0.95rem,1.2vw,1.15rem)] font-bold text-slate-700">
-                {displayedMapLabel.name} interactive map data
+                {displayedMapLabel.name} 
               </p>
               <p className="font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[#879bbd] sm:text-[11px]">
                 {displayHeroLabel} | real-time analysis | 2026
