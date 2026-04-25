@@ -1,4 +1,4 @@
-import { AreaNode } from "@/components/types/data";
+import { AreaNode } from "@/modules/shared/types/data";
 
 export const tesdaAtlas: AreaNode = {
   id: "ph",

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Manrope, Space_Grotesk, Space_Mono } from "next/font/google";
-import { AppShell } from "@/components/navigation/AppShell";
+import { AppShell } from "@/modules/layout/components/AppShell";
 import "./globals.css";
 
 const manrope = Manrope({

@@ -1,14 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { DataBlueprint } from "@/components/dashboard/DataBlueprint";
-import { PhilippinesMapPanel } from "@/features/map/components/PhilippinesMapPanel";
-import { ProgramList } from "@/components/dashboard/ProgramList";
+import { DataBlueprint } from "@/modules/dashboard/components/DataBlueprint";
+import { PhilippinesMapPanel } from "@/modules/map/components/PhilippinesMapPanel";
+import { ProgramList } from "@/modules/dashboard/components/ProgramList";
 import {
   buildAreaIndex,
   getAreaPath,
   tesdaAtlas,
-} from "@/components/lib/data/mockData";
+} from "@/modules/dashboard/data/mockData";
 
 export function TesdaDashboard() {
   const [activeId, setActiveId] = useState("ph");

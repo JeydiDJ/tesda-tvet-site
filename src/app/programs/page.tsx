@@ -1,4 +1,4 @@
-import { PageFrame } from "@/components/pages/PageFrame";
+import { PageFrame } from "@/modules/layout/components/PageFrame";
 
 const rows = [
   ["Bread and Pastry Production NC II", "Tourism", "High"],

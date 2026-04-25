@@ -2,7 +2,7 @@
 
 import type { Map as MapboxMap } from "mapbox-gl";
 import { useEffect, useRef, useState } from "react";
-import { AreaNode } from "@/components/types/data";
+import { AreaNode } from "@/modules/shared/types/data";
 
 type PhilippinesMapPanelProps = {
   activeArea: AreaNode;
@@ -30,26 +30,6 @@ const MUNICIPALITY_EXTRUSION_HEIGHT = 4200;
 const MUNICIPALITY_EXTRUSION_OPACITY = 0.76;
 const MUNICIPALITY_EXTRUSION_RISE_DURATION_MS = 260;
 const MUNICIPALITY_EXTRUSION_DROP_DURATION_MS = 180;
-
-const REGION_BOUNDARY_GEOJSON_PATHS = [
-  "/geojson/regions/provdists-region-100000000.0.01.json",
-  "/geojson/regions/provdists-region-200000000.0.01.json",
-  "/geojson/regions/provdists-region-300000000.0.01.json",
-  "/geojson/regions/provdists-region-400000000.0.01.json",
-  "/geojson/regions/provdists-region-500000000.0.01.json",
-  "/geojson/regions/provdists-region-600000000.0.01.json",
-  "/geojson/regions/provdists-region-700000000.0.01.json",
-  "/geojson/regions/provdists-region-800000000.0.01.json",
-  "/geojson/regions/provdists-region-900000000.0.01.json",
-  "/geojson/regions/provdists-region-1000000000.0.01.json",
-  "/geojson/regions/provdists-region-1100000000.0.01.json",
-  "/geojson/regions/provdists-region-1200000000.0.01.json",
-  "/geojson/regions/provdists-region-1300000000.0.01.json",
-  "/geojson/regions/provdists-region-1400000000.0.01.json",
-  "/geojson/regions/provdists-region-1600000000.0.01.json",
-  "/geojson/regions/provdists-region-1700000000.0.01.json",
-  "/geojson/regions/provdists-region-1900000000.0.01.json",
-] as const;
 
 const MUNICIPALITY_FILL_PALETTE = [
   "#2f6ee5",
@@ -185,15 +165,6 @@ function getPsgcAtLevel(
     return String(properties.adm2_psgc ?? "");
   }
   return String(properties.adm3_psgc ?? "");
-}
-
-function getExpectedChildLevel(
-  level: AreaNode["level"],
-): "region" | "province" | "city" | null {
-  if (level === "country") return "region";
-  if (level === "region") return "province";
-  if (level === "province") return "city";
-  return null;
 }
 
 function getRegionPsgcFromAreaCode(areaCode: string) {
@@ -513,6 +484,8 @@ export function PhilippinesMapPanel({
 
   useEffect(() => {
     if (activeArea.level === "country") {
+      // This reset is intentional when the selection returns to country level.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDrillContext({
         level: "country",
         selectedRegionPsgc: null,
@@ -1120,94 +1093,6 @@ export function PhilippinesMapPanel({
           }
         };
 
-        const handleContextBoundaryClick = (feature: mapboxgl.MapboxGeoJSONFeature) => {
-          const currentArea = areaRef.current;
-          if (currentArea.level !== "region") {
-            return;
-          }
-
-          if (!feature || !feature.properties) return;
-
-          const featureName = safeName(feature.properties.featureName);
-          const featureCode = String(feature.properties.featureCode ?? "");
-
-          const targetChild = (currentArea.children ?? []).find((child) => {
-            const byName = safeName(child.name) === featureName;
-            const byCode = child.code === featureCode;
-            return byName || byCode;
-          });
-          const clickedLabelName = String(feature.properties.featureName ?? getFeatureName(feature.properties));
-
-          debugMapSelection("CONTEXT_CLICK", {
-            currentAreaId: currentArea.id,
-            currentAreaLevel: currentArea.level,
-            featureId: feature.id ?? null,
-            featureName,
-            featureCode,
-            featureProvincePsgc: String(feature.properties.adm2_psgc ?? ""),
-            featureCityPsgc: String(feature.properties.adm3_psgc ?? ""),
-            matchedChildId: targetChild?.id ?? null,
-            matchedChildName: targetChild?.name ?? null,
-            matchedChildLevel: targetChild?.level ?? null,
-          });
-
-          if (targetChild) {
-            setSelectedMapLabel({
-              name: targetChild.name,
-              level: targetChild.level,
-            });
-            interactionRef.current();
-            onSelectRef.current(targetChild.id);
-            return;
-          }
-
-          if (clickedLabelName) {
-            setSelectedMapLabel({
-              name: clickedLabelName,
-              level: "city",
-            });
-          }
-
-          const clickedId = feature.id;
-          if (clickedId !== undefined && clickedId !== null) {
-            selectedContextBoundaryIdsRef.current.forEach((previousId) => {
-              map.setFeatureState(
-                {
-                  source: CONTEXT_BOUNDARY_SOURCE_ID,
-                  id: previousId,
-                },
-                { selected: false },
-              );
-            });
-
-            selectedContextBoundaryIdsRef.current = [clickedId];
-            map.setFeatureState(
-              {
-                source: CONTEXT_BOUNDARY_SOURCE_ID,
-                id: clickedId,
-              },
-              { selected: true },
-            );
-          }
-
-          if (feature.geometry) {
-            const pairs = collectLngLatPairs(feature.geometry as GeoJSON.Geometry);
-            if (pairs.length > 0) {
-              const first = pairs[0];
-              const bounds = pairs.slice(1).reduce(
-                (acc, [lng, lat]) => acc.extend([lng, lat]),
-                new mapboxgl.LngLatBounds(first, first),
-              );
-
-              map.fitBounds(bounds, {
-                padding: getMapCameraPadding(),
-                maxZoom: 12,
-                duration: 850,
-              });
-            }
-          }
-        };
-
         const clearSelection = () => {
           const currentArea = areaRef.current;
           const currentDrillContext = drillContextRef.current;
@@ -1535,7 +1420,7 @@ export function PhilippinesMapPanel({
       map.flyTo({
         center: [activeArea.mapView.lng, activeArea.mapView.lat],
         zoom: activeArea.mapView.zoom,
-        pitch: isMunicipalitySelected ? 46 : 0,
+        pitch: isMunicipalitySelectedRef.current ? 46 : 0,
         padding: getMapCameraPadding(),
         essential: true,
         duration: 1400,
@@ -1565,7 +1450,7 @@ export function PhilippinesMapPanel({
       | mapboxgl.GeoJSONSource
       | undefined;
     labelSource?.setData({ type: "FeatureCollection", features: [] });
-    if (drillContext.level !== "province" || !isMunicipalitySelected) {
+    if (drillContext.level !== "province" || !isMunicipalitySelectedRef.current) {
       extrusionSource?.setData({ type: "FeatureCollection", features: [] });
     }
 
@@ -1672,6 +1557,8 @@ export function PhilippinesMapPanel({
           setMapError((error as Error).message);
         });
     } else {
+      // Clearing counters here keeps map layer metadata in sync after boundary reset.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLayerFeatureCount(null);
       boundaryFeaturesByIdRef.current = new Map();
       source.setData({ type: "FeatureCollection", features: [] });

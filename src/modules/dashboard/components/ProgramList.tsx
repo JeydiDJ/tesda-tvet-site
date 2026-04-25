@@ -1,4 +1,4 @@
-import { ProgramStat } from "@/components/types/data";
+import { ProgramStat } from "@/modules/shared/types/data";
 
 type ProgramListProps = {
   programs: ProgramStat[];

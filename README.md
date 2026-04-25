@@ -39,7 +39,7 @@ flowchart TD
   L --> P[Data pipeline page scaffold]
 
   Q[GeoJSON assets in /public/geojson] --> C
-  R[Mock atlas data in src/components/lib/data/mockData.ts] --> I
+  R[Mock atlas data in src/modules/dashboard/data/mockData.ts] --> I
   R --> J
 
   S[Supabase client/query files] --> T[Prepared but not yet implemented]

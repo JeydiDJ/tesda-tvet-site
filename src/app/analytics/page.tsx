@@ -1,4 +1,4 @@
-import { PageFrame } from "@/components/pages/PageFrame";
+import { PageFrame } from "@/modules/layout/components/PageFrame";
 
 export default function AnalyticsPage() {
   return (
