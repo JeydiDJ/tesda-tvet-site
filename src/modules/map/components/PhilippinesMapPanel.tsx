@@ -3,6 +3,9 @@
 import type { Map as MapboxMap } from "mapbox-gl";
 import { useEffect, useRef, useState } from "react";
 import { AreaNode } from "@/modules/shared/types/data";
+import bagongPilipinasLogo from "@/assets/logo/bagong-pilipinas-logo.png";
+import tesdaLingapLogo from "@/assets/logo/tesda-lingap-logo.png";
+import tesdaLogo from "@/assets/logo/tesda-logo.png";
 
 type PhilippinesMapPanelProps = {
   activeArea: AreaNode;
@@ -52,6 +55,15 @@ type DrillContext = {
   selectedProvincePsgc: string | null;
 };
 
+type OperationsMetricTabKey =
+  | "trainingInstitutions"
+  | "registeredPrograms"
+  | "tvetTrainers"
+  | "assessmentCenters"
+  | "competencyAssessors";
+
+type MetricTheme = "blue" | "cyan" | "amber" | "rose" | "violet";
+
 type GeoJsonFeature = {
   type: "Feature";
   id?: string | number;
@@ -68,7 +80,7 @@ type LngLatPair = [number, number];
 
 function getMapCameraPadding() {
   if (typeof window === "undefined") {
-    return { top: 40, right: 40, bottom: 40, left: 320 };
+    return { top: 40, right: 40, bottom: 40, left: 480 };
   }
 
   const width = window.innerWidth;
@@ -77,10 +89,10 @@ function getMapCameraPadding() {
   }
 
   if (width < 1024) {
-    return { top: 32, right: 32, bottom: 32, left: 400};
+    return { top: 32, right: 32, bottom: 32, left: 560 };
   }
 
-  return { top: 40, right: 40, bottom: 40, left: 520 };
+  return { top: 40, right: 40, bottom: 40, left: 780 };
 }
 
 function safeName(value: unknown) {
@@ -454,6 +466,8 @@ export function PhilippinesMapPanel({
     name: string;
     level: AreaNode["level"];
   } | null>(null);
+  const [activeOperationsTab, setActiveOperationsTab] =
+    useState<OperationsMetricTabKey>("trainingInstitutions");
   const [isMunicipalitySelected, setIsMunicipalitySelected] = useState(false);
   const [layerFeatureCount, setLayerFeatureCount] = useState<number | null>(null);
   const isMunicipalitySelectedRef = useRef(false);
@@ -494,6 +508,10 @@ export function PhilippinesMapPanel({
       setSelectedMapLabel(null);
     }
   }, [activeArea.id, activeArea.level]);
+
+  useEffect(() => {
+    setActiveOperationsTab("trainingInstitutions");
+  }, [activeArea.id]);
 
   useEffect(() => {
     if (!MAPBOX_TOKEN || !mapContainerRef.current || mapRef.current) {
@@ -1622,20 +1640,23 @@ export function PhilippinesMapPanel({
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_14%_30%,rgba(255,255,255,0.74),transparent_28%)]" />
 
       <div className="pointer-events-none absolute inset-0 z-20 mx-auto w-full max-w-[1900px] px-4 sm:px-6 lg:px-8">
-        <div className="absolute left-3 top-[clamp(74px,8.5vh,96px)] w-[min(700px,42vw)] sm:left-5 lg:left-8">
+        <div className="absolute left-3 top-[clamp(74px,8.5vh,96px)] w-[50vw] min-w-[50vw] max-w-[50vw] sm:left-5 lg:left-8">
           <div className="pointer-events-auto rounded-[2rem] px-1.5 py-1.5">
-            <div className="inline-flex items-center gap-2.5  px-4 py-2 shadow-[0_10px_24px_rgba(0,0,0,0)]">
-             
-             
-            </div>
-
-            <h1 className="mt-3 max-w-[640px] font-display text-[clamp(2.1rem,4.2vw,3.8rem)] font-extrabold uppercase leading-[0.9] tracking-[-0.07em] text-[var(--tesda-blue)]">
+            <h1
+              className="mt-3 max-w-[700px] font-display uppercase text-[var(--tesda-blue)]"
+              style={{
+                fontSize: "clamp(2.7rem, 5.8vw, 5.6rem)",
+                fontWeight: 900,
+                lineHeight: 0.88,
+                letterSpacing: "-0.07em",
+              }}
+            >
               {displayHeading}
             </h1>
 
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
               <p className="text-[clamp(0.95rem,1.2vw,1.15rem)] font-bold text-slate-700">
-                {displayedMapLabel.name} 
+                {displayedMapLabel.name}
               </p>
               <p className="font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[#879bbd] sm:text-[11px]">
                 {displayHeroLabel} | real-time analysis | 2026
@@ -1659,7 +1680,6 @@ export function PhilippinesMapPanel({
                 35,327,005
               </p>
             </div>
-
           </div>
         </div>
       </div>
@@ -1675,6 +1695,14 @@ export function PhilippinesMapPanel({
           <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#4e6fae] sm:text-xs">
             {formatAreaLevel(displayedMapLabel.level)}
           </p>
+        </div>
+      </div>
+
+      <div className="pointer-events-none absolute bottom-4 right-4 z-30 sm:bottom-5 sm:right-6 lg:bottom-6 lg:right-8">
+        <div className="pointer-events-auto flex items-center gap-2">
+          <img src={tesdaLogo.src} alt="TESDA logo" style={{ height: 50, width: "auto", maxWidth: 250 }} />
+          <img src={tesdaLingapLogo.src} alt="TESDA Lingap logo" style={{ height: 50, width: "auto", maxWidth: 250 }} />
+          <img src={bagongPilipinasLogo.src} alt="Bagong Pilipinas logo" style={{ height: 50, width: "auto", maxWidth: 250 }} />
         </div>
       </div>
 
@@ -1712,6 +1740,119 @@ function MetricCard({
         {new Intl.NumberFormat("en-PH").format(value)}
       </p>
     </article>
+  );
+}
+
+type OverviewIcon =
+  | "institutions"
+  | "programs"
+  | "trainers"
+  | "assessmentCenters"
+  | "competencyAssessors";
+
+function getMetricThemeClasses(theme: MetricTheme) {
+  if (theme === "cyan") {
+    return {
+      activePill: "bg-[#daf6ff] text-[#116579]",
+      activeIcon: "bg-white/70 text-[#116579]",
+      metricIcon: "bg-[linear-gradient(135deg,#3fc8de,#14738a)]",
+      badge: "bg-[#e5fbff] text-[#0f6d82]",
+      softBadge: "bg-[#effcff] text-[#3e8092]",
+      metricRing: "ring-1 ring-[#d4f6ff]",
+      dot: "bg-[#17a6c1]",
+    };
+  }
+  if (theme === "amber") {
+    return {
+      activePill: "bg-[#fff0cf] text-[#865707]",
+      activeIcon: "bg-white/70 text-[#865707]",
+      metricIcon: "bg-[linear-gradient(135deg,#f1be52,#b97509)]",
+      badge: "bg-[#fff7e4] text-[#93620f]",
+      softBadge: "bg-[#fff9ea] text-[#9e762c]",
+      metricRing: "ring-1 ring-[#f8e7bd]",
+      dot: "bg-[#d69a21]",
+    };
+  }
+  if (theme === "rose") {
+    return {
+      activePill: "bg-[#ffe1ea] text-[#9d2f59]",
+      activeIcon: "bg-white/70 text-[#9d2f59]",
+      metricIcon: "bg-[linear-gradient(135deg,#f2759f,#ba3f6c)]",
+      badge: "bg-[#fff0f4] text-[#a63c65]",
+      softBadge: "bg-[#fff4f7] text-[#af5b7a]",
+      metricRing: "ring-1 ring-[#ffd9e5]",
+      dot: "bg-[#d94f81]",
+    };
+  }
+  if (theme === "violet") {
+    return {
+      activePill: "bg-[#efe4ff] text-[#6540a8]",
+      activeIcon: "bg-white/70 text-[#6540a8]",
+      metricIcon: "bg-[linear-gradient(135deg,#9b7cff,#6441c7)]",
+      badge: "bg-[#f4edff] text-[#6947af]",
+      softBadge: "bg-[#f7f2ff] text-[#7b60b0]",
+      metricRing: "ring-1 ring-[#eadbff]",
+      dot: "bg-[#7f5be0]",
+    };
+  }
+  return {
+    activePill: "bg-[#dce9ff] text-[#1f56af]",
+    activeIcon: "bg-white/70 text-[#1f56af]",
+    metricIcon: "bg-[linear-gradient(135deg,#2c63d4,#173f9d)]",
+    badge: "bg-[#edf4ff] text-[#3464b3]",
+    softBadge: "bg-[#f3f7ff] text-[#5a78b4]",
+    metricRing: "ring-1 ring-[#d8e6ff]",
+    dot: "bg-[#2c63d4]",
+  };
+}
+
+function OverviewIconGlyph({ icon }: { icon: OverviewIcon }) {
+  if (icon === "institutions") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.9">
+        <path d="M3 9 12 4l9 5-9 5-9-5z" />
+        <path d="M5 11v5M9 13v5M13 13v5M17 11v5M4 20h16" />
+      </svg>
+    );
+  }
+  if (icon === "programs") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.9">
+        <path d="M5 4h11l3 3v13H5z" />
+        <path d="M8 11h8M8 15h8" />
+      </svg>
+    );
+  }
+  if (icon === "trainers") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.9">
+        <circle cx="8" cy="8" r="2.5" />
+        <circle cx="16" cy="9" r="2.5" />
+        <path d="M3.5 18.5c.8-2.6 2.6-4 4.5-4h.2c1.9 0 3.7 1.4 4.5 4M13 18.5c.7-2.2 2.1-3.4 3.8-3.4H17c1.7 0 3.1 1.2 3.8 3.4" />
+      </svg>
+    );
+  }
+  if (icon === "assessmentCenters") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.9">
+        <path d="M4 5h16v14H4z" />
+        <path d="M8 9h8M8 13h5M8 17h4" />
+        <path d="m15 16 2 2 3-4" />
+      </svg>
+    );
+  }
+  if (icon === "competencyAssessors") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.9">
+        <path d="M12 3 4 7v6c0 4.5 3.2 7.2 8 8 4.8-.8 8-3.5 8-8V7z" />
+        <path d="m9.4 12.5 1.8 1.8 3.6-3.6" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.9">
+      <path d="M4 20h16" />
+    </svg>
   );
 }
 

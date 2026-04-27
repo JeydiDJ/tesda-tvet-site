@@ -6,9 +6,9 @@ export const tesdaAtlas: AreaNode = {
   name: "Philippines",
   level: "country",
   mapView: {
-    lng: 122.2,
+    lng: 120.9,
     lat: 12.4,
-    zoom: 4.6,
+    zoom: 4.95,
   },
   heroLabel: "National TESDA view",
   summary:

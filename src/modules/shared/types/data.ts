@@ -13,6 +13,9 @@ export type AreaMetrics = {
   cities: number;
   municipalities: number;
   institutions: number;
+  tvetTrainers?: number;
+  assessmentCenters?: number;
+  competencyAssessors?: number;
   enrolledScholars: number;
   enrolledNonScholars: number;
   registeredPrograms: number;
