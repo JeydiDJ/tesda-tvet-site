@@ -29,6 +29,7 @@ const CONTEXT_BOUNDARY_FILL_LAYER_ID = "tesda-context-boundary-fill";
 const CONTEXT_BOUNDARY_LINE_LAYER_ID = "tesda-context-boundary-line";
 const PH_MASK_SOURCE_ID = "tesda-ph-mask";
 const PH_MASK_LAYER_ID = "tesda-ph-mask-fill";
+const PH_REGION_COUNT = 18;
 const MUNICIPALITY_EXTRUSION_HEIGHT = 3000;
 const MUNICIPALITY_EXTRUSION_OPACITY = 0.90;
 const MUNICIPALITY_EXTRUSION_RISE_DURATION_MS = 260;
@@ -55,12 +56,7 @@ type DrillContext = {
   selectedProvincePsgc: string | null;
 };
 
-type OperationsMetricTabKey =
-  | "trainingInstitutions"
-  | "registeredPrograms"
-  | "tvetTrainers"
-  | "assessmentCenters"
-  | "competencyAssessors";
+type StatisticsTabKey = "overview" | "registeredPrograms" | "trainingInstitutions";
 
 type MetricTheme = "blue" | "cyan" | "amber" | "rose" | "violet";
 
@@ -349,6 +345,82 @@ function getExpectedChildLevelByDrillLevel(level: DrillLevel): "region" | "provi
   return "city";
 }
 
+function areDrillContextsEqual(left: DrillContext, right: DrillContext) {
+  return (
+    left.level === right.level &&
+    left.selectedRegionPsgc === right.selectedRegionPsgc &&
+    left.selectedProvincePsgc === right.selectedProvincePsgc
+  );
+}
+
+function resolveDrillContextFromArea(
+  activeArea: AreaNode,
+  path: AreaNode[],
+  resolvedPsgcByAreaId: Record<string, string>,
+): DrillContext {
+  if (activeArea.level === "country") {
+    return {
+      level: "country",
+      selectedRegionPsgc: null,
+      selectedProvincePsgc: null,
+    };
+  }
+
+  const regionArea =
+    activeArea.level === "region"
+      ? activeArea
+      : path.find((item) => item.level === "region");
+  const provinceArea =
+    activeArea.level === "province" || activeArea.level === "city"
+      ? path.find((item) => item.level === "province") ?? activeArea
+      : null;
+
+  const resolvedRegionPsgc =
+    (regionArea ? resolvedPsgcByAreaId[regionArea.id] : "") ||
+    (regionArea ? getRegionPsgcFromAreaCode(regionArea.code) : "");
+  const resolvedProvincePsgc = provinceArea
+    ? resolvedPsgcByAreaId[provinceArea.id] ?? ""
+    : "";
+
+  if (activeArea.level === "region") {
+    return resolvedRegionPsgc
+      ? {
+          level: "region",
+          selectedRegionPsgc: resolvedRegionPsgc,
+          selectedProvincePsgc: null,
+        }
+      : {
+          level: "country",
+          selectedRegionPsgc: null,
+          selectedProvincePsgc: null,
+        };
+  }
+
+  if (activeArea.level === "province" || activeArea.level === "city") {
+    if (resolvedProvincePsgc) {
+      return {
+        level: "province",
+        selectedRegionPsgc: resolvedRegionPsgc || null,
+        selectedProvincePsgc: resolvedProvincePsgc,
+      };
+    }
+
+    if (resolvedRegionPsgc) {
+      return {
+        level: "region",
+        selectedRegionPsgc: resolvedRegionPsgc,
+        selectedProvincePsgc: null,
+      };
+    }
+  }
+
+  return {
+    level: "country",
+    selectedRegionPsgc: null,
+    selectedProvincePsgc: null,
+  };
+}
+
 function applyMunicipalityColors(collection: GeoJsonFeatureCollection): GeoJsonFeatureCollection {
   const ordered = [...collection.features].sort((left, right) =>
     String(getFeatureCode(left.properties)).localeCompare(String(getFeatureCode(right.properties))),
@@ -452,6 +524,7 @@ export function PhilippinesMapPanel({
   const hoveredContextBoundaryIdRef = useRef<string | number | null>(null);
   const resolvedPsgcByAreaIdRef = useRef<Record<string, string>>({});
   const boundaryFeaturesByIdRef = useRef<Map<string | number, GeoJsonFeature>>(new Map());
+  const boundaryLoadRequestIdRef = useRef(0);
   const extrusionClearTimeoutRef = useRef<number | null>(null);
   const extrusionRiseTimeoutRef = useRef<number | null>(null);
   const [drillContext, setDrillContext] = useState<DrillContext>({
@@ -466,8 +539,8 @@ export function PhilippinesMapPanel({
     name: string;
     level: AreaNode["level"];
   } | null>(null);
-  const [activeOperationsTab, setActiveOperationsTab] =
-    useState<OperationsMetricTabKey>("trainingInstitutions");
+  const [activeStatisticsTab, setActiveStatisticsTab] =
+    useState<StatisticsTabKey>("overview");
   const [isMunicipalitySelected, setIsMunicipalitySelected] = useState(false);
   const [layerFeatureCount, setLayerFeatureCount] = useState<number | null>(null);
   const isMunicipalitySelectedRef = useRef(false);
@@ -497,20 +570,22 @@ export function PhilippinesMapPanel({
   }, [drillContext]);
 
   useEffect(() => {
-    if (activeArea.level === "country") {
-      // This reset is intentional when the selection returns to country level.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setDrillContext({
-        level: "country",
-        selectedRegionPsgc: null,
-        selectedProvincePsgc: null,
-      });
-      setSelectedMapLabel(null);
+    const nextDrillContext = resolveDrillContextFromArea(
+      activeArea,
+      path,
+      resolvedPsgcByAreaIdRef.current,
+    );
+    const currentDrillContext = drillContextRef.current;
+    if (!areDrillContextsEqual(currentDrillContext, nextDrillContext)) {
+      setDrillContext(nextDrillContext);
     }
-  }, [activeArea.id, activeArea.level]);
+
+    // Selected labels should always follow the active area after level changes.
+    setSelectedMapLabel(null);
+  }, [activeArea.id, activeArea.level, activeArea.code, path]);
 
   useEffect(() => {
-    setActiveOperationsTab("trainingInstitutions");
+    setActiveStatisticsTab("overview");
   }, [activeArea.id]);
 
   useEffect(() => {
@@ -1425,6 +1500,11 @@ export function PhilippinesMapPanel({
     if (!mapReady || !map) {
       return;
     }
+    const loadRequestId = boundaryLoadRequestIdRef.current + 1;
+    boundaryLoadRequestIdRef.current = loadRequestId;
+    let cancelled = false;
+    const isLatestBoundaryLoad = () =>
+      !cancelled && boundaryLoadRequestIdRef.current === loadRequestId;
 
     if (map.getLayer(CONTEXT_BOUNDARY_FILL_LAYER_ID)) {
       map.setLayoutProperty(
@@ -1473,8 +1553,34 @@ export function PhilippinesMapPanel({
     }
 
     if (!source) {
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
+
+    selectedBoundaryIdsRef.current.forEach((previousId) => {
+      map.setFeatureState(
+        {
+          source: BOUNDARY_SOURCE_ID,
+          id: previousId,
+        },
+        { selected: false },
+      );
+    });
+    if (hoveredBoundaryIdRef.current !== null) {
+      map.setFeatureState(
+        {
+          source: BOUNDARY_SOURCE_ID,
+          id: hoveredBoundaryIdRef.current,
+        },
+        { hovered: false },
+      );
+      hoveredBoundaryIdRef.current = null;
+    }
+    selectedBoundaryIdsRef.current = [];
+    source.setData({ type: "FeatureCollection", features: [] });
+    boundaryFeaturesByIdRef.current = new Map();
+    setLayerFeatureCount(null);
 
     if (drillContext.level === "country") {
       fetch("/geojson/country/country.0.01.json")
@@ -1485,8 +1591,10 @@ export function PhilippinesMapPanel({
           return response.json() as Promise<unknown>;
         })
         .then((data) => {
+          if (!isLatestBoundaryLoad()) {
+            return;
+          }
           const normalized = normalizeGeoJson(data);
-          selectedBoundaryIdsRef.current = [];
           setLayerFeatureCount(normalized.features.length);
           boundaryFeaturesByIdRef.current = new Map(
             normalized.features
@@ -1498,6 +1606,9 @@ export function PhilippinesMapPanel({
           source.setData(normalized as unknown as GeoJSON.FeatureCollection);
         })
         .catch((error) => {
+          if (!isLatestBoundaryLoad()) {
+            return;
+          }
           setMapError((error as Error).message);
         });
     } else if (boundaryPath) {
@@ -1510,6 +1621,9 @@ export function PhilippinesMapPanel({
           return response.json() as Promise<unknown>;
         })
         .then((data) => {
+          if (!isLatestBoundaryLoad()) {
+            return;
+          }
           const normalized = normalizeGeoJson(data);
           const styledCollection =
             drillContext.level === "province"
@@ -1572,20 +1686,28 @@ export function PhilippinesMapPanel({
           });
         })
         .catch((error) => {
+          if (!isLatestBoundaryLoad()) {
+            return;
+          }
           setMapError((error as Error).message);
         });
-    } else {
-      // Clearing counters here keeps map layer metadata in sync after boundary reset.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLayerFeatureCount(null);
-      boundaryFeaturesByIdRef.current = new Map();
-      source.setData({ type: "FeatureCollection", features: [] });
     }
 
     if (contextSource) {
+      if (hoveredContextBoundaryIdRef.current !== null) {
+        map.setFeatureState(
+          { source: CONTEXT_BOUNDARY_SOURCE_ID, id: hoveredContextBoundaryIdRef.current },
+          { hovered: false },
+        );
+        hoveredContextBoundaryIdRef.current = null;
+      }
       selectedContextBoundaryIdsRef.current = [];
       contextSource.setData({ type: "FeatureCollection", features: [] });
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeArea, mapReady, drillContext]);
 
   useEffect(() => {
@@ -1628,10 +1750,41 @@ export function PhilippinesMapPanel({
   const layerCountValue =
     layerFeatureCount ??
     (drillContext.level === "country"
-      ? 17
+      ? PH_REGION_COUNT
       : drillContext.level === "region"
         ? activeArea.metrics.provinces
         : activeArea.metrics.municipalities);
+  const statisticsTabs: Array<{ key: StatisticsTabKey; label: string }> = [
+    { key: "overview", label: "Overview" },
+    { key: "registeredPrograms", label: "Registered Programs" },
+    { key: "trainingInstitutions", label: "Training Institutions" },
+  ];
+  const primaryStatistic =
+    activeStatisticsTab === "registeredPrograms"
+      ? { label: "Registered Programs", value: activeArea.metrics.registeredPrograms }
+      : activeStatisticsTab === "trainingInstitutions"
+        ? { label: "Training Institutions", value: activeArea.metrics.institutions }
+        : { label: layerCountLabel, value: layerCountValue };
+  const visibleSecondaryCards =
+    activeStatisticsTab === "overview"
+      ? drillContext.level === "country"
+        ? [
+            { label: "Provinces", value: activeArea.metrics.provinces },
+            { label: "Districts", value: 253 },
+            { label: "Cities", value: activeArea.metrics.cities },
+            { label: "Municipalities", value: activeArea.metrics.municipalities },
+          ]
+        : drillContext.level === "region"
+          ? [
+              { label: "Cities", value: activeArea.metrics.cities },
+              { label: "Municipalities", value: activeArea.metrics.municipalities },
+            ]
+          : []
+      : [
+          { label: "TVET Graduates", value: activeArea.metrics.tvetGraduates },
+          { label: "Enrolled Scholars", value: activeArea.metrics.enrolledScholars },
+          { label: "Enrolled Non-scholars", value: activeArea.metrics.enrolledNonScholars },
+        ];
 
   return (
     <section className="relative h-[100dvh] overflow-hidden bg-[#edf5ff]">
@@ -1663,13 +1816,31 @@ export function PhilippinesMapPanel({
               </p>
             </div>
 
+            <div className="mt-3 flex flex-wrap gap-1.5 sm:gap-2">
+              {statisticsTabs.map((tab) => {
+                const isActive = activeStatisticsTab === tab.key;
+                return (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setActiveStatisticsTab(tab.key)}
+                    className={`rounded-full border px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.16em] shadow-[0_8px_16px_rgba(72,94,146,0.1)] transition sm:px-3 sm:text-[11px] ${
+                      isActive
+                        ? "border-[#a9bfe9] bg-[#eaf2ff] text-[#1f4dac]"
+                        : "border-[rgba(21,35,60,0.08)] bg-white/96 text-[#6f86ad] hover:border-[#b8caea] hover:text-[#3c5e99]"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="mt-4 grid grid-cols-2 gap-2.5 lg:grid-cols-3">
-              <MetricCard label={layerCountLabel} value={layerCountValue} emphasis />
-              <MetricCard label="Provinces" value={activeArea.metrics.provinces} />
-              <MetricCard label="Districts" value={253} />
-              <MetricCard label="Cities" value={activeArea.metrics.cities} />
-              <MetricCard label="Municipalities" value={activeArea.metrics.municipalities} />
-              <MetricCard label="Barangays" value={41464} />
+              <MetricCard label={primaryStatistic.label} value={primaryStatistic.value} emphasis />
+              {visibleSecondaryCards.map((card) => (
+                <MetricCard key={card.label} label={card.label} value={card.value} />
+              ))}
             </div>
 
             <div className="mt-3 rounded-[1.35rem] bg-[linear-gradient(180deg,#3159d3,#2248b2)] px-4 py-3.5 text-white shadow-[0_20px_46px_rgba(35,73,180,0.2)]">
