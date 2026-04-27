@@ -2,7 +2,19 @@
 
 import type { Map as MapboxMap } from "mapbox-gl";
 import { useEffect, useRef, useState } from "react";
-import { AreaNode } from "@/modules/shared/types/data";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { AreaNode, PsgcSelection } from "@/modules/shared/types/data";
+import { getCompendiumSelection } from "@/modules/dashboard/data/compendium";
 import bagongPilipinasLogo from "@/assets/logo/bagong-pilipinas-logo.png";
 import tesdaLingapLogo from "@/assets/logo/tesda-lingap-logo.png";
 import tesdaLogo from "@/assets/logo/tesda-logo.png";
@@ -12,6 +24,7 @@ type PhilippinesMapPanelProps = {
   path: AreaNode[];
   onSelect: (id: string) => void;
   onInteractionStart: () => void;
+  onPsgcSelectionChange?: (selection: PsgcSelection) => void;
 };
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
@@ -56,7 +69,11 @@ type DrillContext = {
   selectedProvincePsgc: string | null;
 };
 
-type StatisticsTabKey = "overview" | "registeredPrograms" | "trainingInstitutions";
+type StatisticsTabKey =
+  | "overview"
+  | "registeredPrograms"
+  | "trainingInstitutions"
+  | "statistics";
 
 type MetricTheme = "blue" | "cyan" | "amber" | "rose" | "violet";
 
@@ -421,6 +438,42 @@ function resolveDrillContextFromArea(
   };
 }
 
+function resolvePsgcSelectionFromArea(
+  activeArea: AreaNode,
+  path: AreaNode[],
+  drillContext: DrillContext,
+  resolvedPsgcByAreaId: Record<string, string>,
+): PsgcSelection {
+  const regionNode =
+    activeArea.level === "region"
+      ? activeArea
+      : path.find((item) => item.level === "region");
+  const provinceNode =
+    activeArea.level === "province"
+      ? activeArea
+      : path.find((item) => item.level === "province");
+  const cityNode = activeArea.level === "city" ? activeArea : null;
+
+  const regionPsgc =
+    (regionNode ? resolvedPsgcByAreaId[regionNode.id] : "") ||
+    (regionNode ? getRegionPsgcFromAreaCode(regionNode.code) : "") ||
+    drillContext.selectedRegionPsgc ||
+    "";
+  const provincePsgc =
+    (provinceNode ? resolvedPsgcByAreaId[provinceNode.id] : "") ||
+    drillContext.selectedProvincePsgc ||
+    "";
+  const cityMunicipalityPsgc = cityNode
+    ? (resolvedPsgcByAreaId[cityNode.id] ?? "")
+    : "";
+
+  return {
+    regionPsgc: regionPsgc || null,
+    provincePsgc: provincePsgc || null,
+    cityMunicipalityPsgc: cityMunicipalityPsgc || null,
+  };
+}
+
 function applyMunicipalityColors(collection: GeoJsonFeatureCollection): GeoJsonFeatureCollection {
   const ordered = [...collection.features].sort((left, right) =>
     String(getFeatureCode(left.properties)).localeCompare(String(getFeatureCode(right.properties))),
@@ -509,11 +562,13 @@ export function PhilippinesMapPanel({
   path,
   onSelect,
   onInteractionStart,
+  onPsgcSelectionChange,
 }: PhilippinesMapPanelProps) {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapboxMap | null>(null);
   const interactionRef = useRef(onInteractionStart);
   const onSelectRef = useRef(onSelect);
+  const onPsgcSelectionChangeRef = useRef(onPsgcSelectionChange);
   const initialViewRef = useRef(activeArea.mapView);
   const lastCameraAreaIdRef = useRef(activeArea.id);
   const rootAreaIdRef = useRef(path[0]?.id ?? "ph");
@@ -541,8 +596,17 @@ export function PhilippinesMapPanel({
   } | null>(null);
   const [activeStatisticsTab, setActiveStatisticsTab] =
     useState<StatisticsTabKey>("overview");
+  const [hoveredStatisticsTab, setHoveredStatisticsTab] = useState<StatisticsTabKey | null>(null);
   const [isMunicipalitySelected, setIsMunicipalitySelected] = useState(false);
   const [layerFeatureCount, setLayerFeatureCount] = useState<number | null>(null);
+  const [programCharts, setProgramCharts] = useState<{
+    sectors: Array<{ sector: string; totalPrograms: number }>;
+    areas: Array<{ area: string; totalPrograms: number }>;
+  }>({ sectors: [], areas: [] });
+  const [chartsReady, setChartsReady] = useState(false);
+  const [statisticsSlideIndex, setStatisticsSlideIndex] = useState(0);
+  const statisticsSwipeStartXRef = useRef<number | null>(null);
+  const statisticsSwipeDeltaXRef = useRef(0);
   const isMunicipalitySelectedRef = useRef(false);
 
   useEffect(() => {
@@ -552,6 +616,10 @@ export function PhilippinesMapPanel({
   useEffect(() => {
     onSelectRef.current = onSelect;
   }, [onSelect]);
+
+  useEffect(() => {
+    onPsgcSelectionChangeRef.current = onPsgcSelectionChange;
+  }, [onPsgcSelectionChange]);
 
   useEffect(() => {
     rootAreaIdRef.current = path[0]?.id ?? "ph";
@@ -570,6 +638,10 @@ export function PhilippinesMapPanel({
   }, [drillContext]);
 
   useEffect(() => {
+    setChartsReady(true);
+  }, []);
+
+  useEffect(() => {
     const nextDrillContext = resolveDrillContextFromArea(
       activeArea,
       path,
@@ -586,7 +658,66 @@ export function PhilippinesMapPanel({
 
   useEffect(() => {
     setActiveStatisticsTab("overview");
+    setStatisticsSlideIndex(0);
   }, [activeArea.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const selectedLevel =
+      activeArea.level === "country"
+        ? "nationwide"
+        : activeArea.level === "region"
+          ? "region"
+          : activeArea.level === "province"
+            ? "province"
+            : "city_municipality";
+    const selection = getCompendiumSelection(activeArea, path);
+
+    fetch("/api/dashboard/charts", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        selectedLevel,
+        selection,
+      }),
+      cache: "no-store",
+    })
+      .then((response) => response.json() as Promise<{
+        sectors: Array<{ sector: string; totalPrograms: number }>;
+        areas: Array<{ area: string; totalPrograms: number }>;
+      }>)
+      .then((payload) => {
+        if (cancelled) return;
+        setProgramCharts({
+          sectors: payload.sectors ?? [],
+          areas: payload.areas ?? [],
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setProgramCharts({ sectors: [], areas: [] });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeArea.id, activeArea.level, path]);
+
+  useEffect(() => {
+    if (!onPsgcSelectionChangeRef.current) {
+      return;
+    }
+
+    const selection = resolvePsgcSelectionFromArea(
+      activeArea,
+      path,
+      drillContext,
+      resolvedPsgcByAreaIdRef.current,
+    );
+    onPsgcSelectionChangeRef.current(selection);
+  }, [activeArea.id, path, drillContext]);
 
   useEffect(() => {
     if (!MAPBOX_TOKEN || !mapContainerRef.current || mapRef.current) {
@@ -1758,15 +1889,18 @@ export function PhilippinesMapPanel({
     { key: "overview", label: "Overview" },
     { key: "registeredPrograms", label: "Registered Programs" },
     { key: "trainingInstitutions", label: "Training Institutions" },
+    { key: "statistics", label: "Statistics" },
   ];
   const primaryStatistic =
     activeStatisticsTab === "registeredPrograms"
       ? { label: "Registered Programs", value: activeArea.metrics.registeredPrograms }
       : activeStatisticsTab === "trainingInstitutions"
         ? { label: "Training Institutions", value: activeArea.metrics.institutions }
+        : activeStatisticsTab === "statistics"
+          ? { label: layerCountLabel, value: layerCountValue }
         : { label: layerCountLabel, value: layerCountValue };
   const visibleSecondaryCards =
-    activeStatisticsTab === "overview"
+    activeStatisticsTab === "overview" || activeStatisticsTab === "statistics"
       ? drillContext.level === "country"
         ? [
             { label: "Provinces", value: activeArea.metrics.provinces },
@@ -1785,6 +1919,26 @@ export function PhilippinesMapPanel({
           { label: "Enrolled Scholars", value: activeArea.metrics.enrolledScholars },
           { label: "Enrolled Non-scholars", value: activeArea.metrics.enrolledNonScholars },
         ];
+  const statisticsSlideCount = 2;
+  const handleStatisticsSwipeStart = (clientX: number) => {
+    statisticsSwipeStartXRef.current = clientX;
+    statisticsSwipeDeltaXRef.current = 0;
+  };
+  const handleStatisticsSwipeMove = (clientX: number) => {
+    if (statisticsSwipeStartXRef.current === null) return;
+    statisticsSwipeDeltaXRef.current = clientX - statisticsSwipeStartXRef.current;
+  };
+  const handleStatisticsSwipeEnd = () => {
+    const deltaX = statisticsSwipeDeltaXRef.current;
+    if (Math.abs(deltaX) > 48) {
+      const direction = deltaX < 0 ? 1 : -1;
+      setStatisticsSlideIndex((current) =>
+        Math.max(0, Math.min(statisticsSlideCount - 1, current + direction)),
+      );
+    }
+    statisticsSwipeStartXRef.current = null;
+    statisticsSwipeDeltaXRef.current = 0;
+  };
 
   return (
     <section className="relative h-[100dvh] overflow-hidden bg-[#edf5ff]">
@@ -1792,9 +1946,11 @@ export function PhilippinesMapPanel({
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.98)_0%,rgba(255,255,255,0.92)_18%,rgba(255,255,255,0.76)_32%,rgba(239,247,255,0.32)_55%,rgba(239,247,255,0.08)_100%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_14%_30%,rgba(255,255,255,0.74),transparent_28%)]" />
 
-      <div className="pointer-events-none absolute inset-0 z-20 mx-auto w-full max-w-[1900px] px-4 sm:px-6 lg:px-8">
-        <div className="absolute left-3 top-[clamp(74px,8.5vh,96px)] w-[50vw] min-w-[50vw] max-w-[50vw] sm:left-5 lg:left-8">
-          <div className="pointer-events-auto rounded-[2rem] px-1.5 py-1.5">
+      <div
+        className="pointer-events-auto absolute left-3 top-[clamp(74px,8.5vh,96px)] z-40 h-[calc(100dvh-clamp(104px,11vh,132px))] pr-2 pb-2 sm:left-5 lg:left-8"
+        style={{ width: "45vw", minWidth: "320px", maxWidth: "45vw" }}
+      >
+          <div className="pointer-events-auto flex h-full min-h-0 flex-col rounded-[2rem] px-1.5 py-1.5">
             <h1
               className="mt-3 max-w-[700px] font-display uppercase text-[var(--tesda-blue)]"
               style={{
@@ -1816,57 +1972,130 @@ export function PhilippinesMapPanel({
               </p>
             </div>
 
-            <div className="mt-3 flex flex-wrap gap-1.5 sm:gap-2">
+            <div className="pointer-events-auto relative z-30 mt-3 flex flex-wrap gap-2">
               {statisticsTabs.map((tab) => {
                 const isActive = activeStatisticsTab === tab.key;
+                const isHovered = hoveredStatisticsTab === tab.key;
+                const tabStyle = {
+                  borderColor: isActive || isHovered ? "#7fa4e6" : "rgba(21,35,60,0.07)",
+                  background: isActive
+                    ? "linear-gradient(180deg,#eff5ff,#dfeaff)"
+                    : isHovered
+                      ? "linear-gradient(180deg,#f2f7ff,#e2ecff)"
+                      : "rgba(255,255,255,0.96)",
+                  color: isActive || isHovered ? "#2f5cbe" : "#92a4c1",
+                  boxShadow: isActive
+                    ? "0 12px 22px rgba(51,93,185,0.22)"
+                    : isHovered
+                      ? "0 12px 22px rgba(51,93,185,0.20)"
+                      : "0 14px 24px rgba(72,94,146,0.10)",
+                  transform: isHovered ? "translateY(-1px)" : "translateY(0)",
+                } as const;
                 return (
                   <button
                     key={tab.key}
                     type="button"
                     onClick={() => setActiveStatisticsTab(tab.key)}
-                    className={`rounded-full border px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.16em] shadow-[0_8px_16px_rgba(72,94,146,0.1)] transition sm:px-3 sm:text-[11px] ${
-                      isActive
-                        ? "border-[#a9bfe9] bg-[#eaf2ff] text-[#1f4dac]"
-                        : "border-[rgba(21,35,60,0.08)] bg-white/96 text-[#6f86ad] hover:border-[#b8caea] hover:text-[#3c5e99]"
-                    }`}
+                    onMouseEnter={() => setHoveredStatisticsTab(tab.key)}
+                    onMouseLeave={() => setHoveredStatisticsTab(null)}
+                    onFocus={() => setHoveredStatisticsTab(tab.key)}
+                    onBlur={() => setHoveredStatisticsTab(null)}
+                    className="pointer-events-auto relative z-30 rounded-full border px-3 py-2 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7fa4e6] focus-visible:ring-offset-1 sm:px-3.5 sm:py-2.5"
+                    style={tabStyle}
                   >
-                    {tab.label}
+                    <span
+                      className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] sm:text-[11px]"
+                    >
+                      {tab.label}
+                    </span>
                   </button>
                 );
               })}
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-2.5 lg:grid-cols-3">
-              <MetricCard label={primaryStatistic.label} value={primaryStatistic.value} emphasis />
-              {visibleSecondaryCards.map((card) => (
-                <MetricCard key={card.label} label={card.label} value={card.value} />
-              ))}
-            </div>
+            <div className="mt-4 space-y-3 pr-1 pb-2">
+              {activeStatisticsTab !== "statistics" ? (
+                <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-3">
+                  <MetricCard label={primaryStatistic.label} value={primaryStatistic.value} emphasis />
+                  {visibleSecondaryCards.map((card) => (
+                    <MetricCard key={card.label} label={card.label} value={card.value} />
+                  ))}
+                </div>
+              ) : (
+                <>
+              
 
-            <div className="mt-3 rounded-[1.35rem] bg-[linear-gradient(180deg,#3159d3,#2248b2)] px-4 py-3.5 text-white shadow-[0_20px_46px_rgba(35,73,180,0.2)]">
-              <p className="font-mono text-xs font-bold uppercase tracking-[0.18em] text-white/74 sm:text-sm">
-                Potential clients
-              </p>
-              <p className="mt-1.5 text-[clamp(2.2rem,3.3vw,3.2rem)] font-extrabold leading-none tracking-[-0.08em]">
-                35,327,005
-              </p>
+                  <div
+                    className="overflow-hidden rounded-[1.35rem]"
+                    style={{ touchAction: "pan-y" }}
+                    onMouseDown={(event) => {
+                      if (event.button !== 0) return;
+                      handleStatisticsSwipeStart(event.clientX);
+                    }}
+                    onMouseMove={(event) => {
+                      if ((event.buttons & 1) !== 1) return;
+                      handleStatisticsSwipeMove(event.clientX);
+                    }}
+                    onMouseUp={handleStatisticsSwipeEnd}
+                    onMouseLeave={handleStatisticsSwipeEnd}
+                    onTouchStart={(event) => {
+                      if (event.touches.length === 0) return;
+                      handleStatisticsSwipeStart(event.touches[0].clientX);
+                    }}
+                    onTouchMove={(event) => {
+                      if (event.touches.length === 0) return;
+                      handleStatisticsSwipeMove(event.touches[0].clientX);
+                    }}
+                    onTouchEnd={handleStatisticsSwipeEnd}
+                    onTouchCancel={handleStatisticsSwipeEnd}
+                  >
+                    <div
+                      className="flex transition-transform duration-300 ease-out"
+                      style={{
+                        transform: `translateX(-${statisticsSlideIndex * 100}%)`,
+                      }}
+                    >
+                      <div className="w-full shrink-0 px-0.5 py-0.5">
+                        <SectorSplitCard
+                          rows={programCharts.sectors}
+                          enabled={chartsReady}
+                        />
+                      </div>
+
+                      <div className="w-full shrink-0 px-0.5 py-0.5">
+                        <div style={{ width: "min(520px, 100%)" }}>
+                          <BarChartCard
+                            title="Programs by Selected Area"
+                            rows={programCharts.areas}
+                            enabled={chartsReady}
+                            areaLabel={
+                              activeArea.level === "country"
+                                ? "Region"
+                                : activeArea.level === "region"
+                                  ? "Province"
+                                  : "Municipality"
+                            }
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                </>
+              )}
+
+              {activeStatisticsTab !== "statistics" ? (
+                <div className="mx-auto mt-3 w-[480px] max-w-full rounded-[1.35rem] bg-[linear-gradient(180deg,#3159d3,#2248b2)] px-4 py-3.5 text-white shadow-[0_20px_46px_rgba(35,73,180,0.2)]">
+                  <p className="font-mono text-xs font-bold uppercase tracking-[0.18em] text-white/74 sm:text-sm">
+                    Potential clients
+                  </p>
+                  <p className="mt-1.5 text-[clamp(2.2rem,3.3vw,3.2rem)] font-extrabold leading-none tracking-[-0.08em]">
+                    35,327,005
+                  </p>
+                </div>
+              ) : null}
             </div>
           </div>
-        </div>
-      </div>
-
-      <div className="pointer-events-none absolute right-4 top-4 z-20 sm:right-6 sm:top-6 lg:right-8">
-        <div className="rounded-2xl border border-[#b9caea] bg-white/95 px-4 py-3 shadow-[0_16px_38px_rgba(37,67,132,0.16)] backdrop-blur-[2px]">
-          <p className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-[#7f93b6] sm:text-xs">
-            Selected Area
-          </p>
-          <p className="mt-1 text-base font-extrabold leading-tight tracking-[-0.02em] text-[#1f3561] sm:text-lg">
-            {displayedMapLabel.name}
-          </p>
-          <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#4e6fae] sm:text-xs">
-            {formatAreaLevel(displayedMapLabel.level)}
-          </p>
-        </div>
       </div>
 
       <div className="pointer-events-none absolute bottom-4 right-4 z-30 sm:bottom-5 sm:right-6 lg:bottom-6 lg:right-8">
@@ -1899,17 +2128,187 @@ function MetricCard({
   emphasis?: boolean;
 }) {
   return (
-    <article className="rounded-[1.25rem] bg-white/96 px-3.5 py-3.5 shadow-[0_14px_24px_rgba(72,94,146,0.1)]">
-      <p className="font-mono text-xs font-bold uppercase tracking-[0.16em] text-[#92a4c1] sm:text-sm">
+    <article className="group relative overflow-hidden rounded-[1.25rem] border border-[rgba(21,35,60,0.06)] bg-white/96 px-3.5 py-3.5 shadow-[0_14px_24px_rgba(72,94,146,0.1)] transition-all duration-300 hover:-translate-y-0.5 hover:border-[#b8caea] hover:shadow-[0_20px_30px_rgba(57,87,152,0.16)]">
+      <span className="pointer-events-none absolute inset-0 -translate-x-[120%] bg-[linear-gradient(110deg,rgba(255,255,255,0)_15%,rgba(255,255,255,0.58)_48%,rgba(255,255,255,0)_82%)] opacity-0 transition-all duration-500 group-hover:translate-x-[120%] group-hover:opacity-100" />
+      <p className="relative z-10 font-mono text-xs font-bold uppercase tracking-[0.16em] text-[#92a4c1] sm:text-sm">
         {label}
       </p>
       <p
-        className={`mt-2.5 font-extrabold leading-none tracking-[-0.06em] text-[#22324d] ${
+        className={`relative z-10 mt-2.5 font-extrabold leading-none tracking-[-0.06em] text-[#22324d] ${
           emphasis ? "text-[2.2rem]" : "text-[2rem]"
         }`}
       >
         {new Intl.NumberFormat("en-PH").format(value)}
       </p>
+    </article>
+  );
+}
+
+function SectorSplitCard({
+  rows,
+  enabled,
+}: {
+  rows: Array<{ sector: string; totalPrograms: number }>;
+  enabled: boolean;
+}) {
+  const palette = ["#2f6ee5", "#4a85ed", "#62a0f5", "#76b6f7", "#4d8fd8", "#86a8ef", "#6b8fd0"];
+  const topRows = rows.slice(0, 7);
+  const chartData = topRows.map((row) => ({
+    name: row.sector,
+    value: row.totalPrograms,
+  }));
+  return (
+    <article className="w-[520px] max-w-full overflow-hidden rounded-[1.25rem] border border-[rgba(21,35,60,0.06)] bg-white/96 shadow-[0_14px_24px_rgba(72,94,146,0.1)]">
+      <div className="grid min-h-[320px] grid-cols-[220px_1fr]">
+        <section className="border-r border-[rgba(21,35,60,0.06)] px-3 py-3">
+          <p className="font-mono text-xs font-bold uppercase tracking-[0.18em] text-[#92a4c1]">
+            Programs by Sector
+          </p>
+          <div className="mt-2 flex items-center justify-center">
+            <div className="relative h-48 w-48">
+              {enabled ? (
+                <PieChart width={192} height={192}>
+                  <Pie
+                    data={chartData}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={48}
+                    outerRadius={88}
+                    paddingAngle={1}
+                    stroke="rgba(255,255,255,0.9)"
+                    strokeWidth={2}
+                  >
+                    {chartData.map((item, index) => (
+                      <Cell key={`${item.name}-${index}`} fill={palette[index % palette.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(value) =>
+                      new Intl.NumberFormat("en-PH").format(Number(value))
+                    }
+                  />
+                </PieChart>
+              ) : (
+                <div className="h-48 w-48 rounded-full border border-[#d9e5fb] bg-[#f4f8ff]" />
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="px-4 py-3">
+          <p className="font-mono text-xs font-bold uppercase tracking-[0.18em] text-[#92a4c1]">
+            Sector Breakdown
+          </p>
+          <div className="mt-2 space-y-0.5">
+            {topRows.length > 0 ? (
+              topRows.map((row, index) => (
+                <div
+                  key={row.sector}
+                  className="flex items-center justify-between gap-3 border-b border-[rgba(21,35,60,0.05)] py-1.5 last:border-b-0"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
+                      style={{ background: palette[index % palette.length] }}
+                    />
+                    <p className="truncate text-sm font-semibold text-[#5c7298]">{row.sector}</p>
+                  </div>
+                  <p className="text-sm font-extrabold tracking-[-0.02em] text-[#22324d]">
+                    {new Intl.NumberFormat("en-PH").format(row.totalPrograms)}
+                  </p>
+                </div>
+              ))
+            ) : (
+              <p className="py-2 text-xs font-semibold text-[#8da0c0]">No sector data yet.</p>
+            )}
+          </div>
+        </section>
+      </div>
+    </article>
+  );
+}
+
+function BarChartCard({
+  title,
+  rows,
+  areaLabel,
+  enabled,
+}: {
+  title: string;
+  rows: Array<{ area: string; totalPrograms: number }>;
+  areaLabel: string;
+  enabled: boolean;
+}) {
+  const topRows = rows
+    .filter((item) => String(item.area ?? "").trim().length > 0)
+    .slice(0, 8);
+  const chartData = topRows.map((row) => ({
+    area: row.area,
+    totalPrograms: row.totalPrograms,
+  }));
+  const chartHeight = Math.max(240, chartData.length * 34);
+  const chartWidth = 460;
+
+  return (
+    <article className="mt-3 w-full max-w-full overflow-hidden rounded-[1.25rem] border border-[rgba(21,35,60,0.06)] bg-white/96 shadow-[0_14px_24px_rgba(72,94,146,0.1)]">
+      <header className="border-b border-[rgba(21,35,60,0.06)] px-4 py-3">
+        <p className="font-mono text-xs font-bold uppercase tracking-[0.18em] text-[#92a4c1]">
+          {title}
+        </p>
+      </header>
+      <div className="px-4 py-3">
+        {enabled && topRows.length > 0 ? (
+          <div className="w-full overflow-x-auto">
+            <BarChart
+              width={chartWidth}
+              height={chartHeight}
+              data={chartData}
+              layout="vertical"
+              margin={{ top: 4, right: 8, left: 8, bottom: 4 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5edf9" />
+              <XAxis
+                type="number"
+                tick={{ fill: "#6f86ad", fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <YAxis
+                type="category"
+                dataKey="area"
+                width={120}
+                tick={{ fill: "#5c7298", fontSize: 11, fontWeight: 600 }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <Tooltip
+                formatter={(value) =>
+                  new Intl.NumberFormat("en-PH").format(Number(value))
+                }
+              />
+              <Bar
+                dataKey="totalPrograms"
+                radius={[0, 6, 6, 0]}
+                fill="url(#programBarGradient)"
+              />
+              <defs>
+                <linearGradient id="programBarGradient" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#3f72e0" />
+                  <stop offset="100%" stopColor="#2e59c4" />
+                </linearGradient>
+              </defs>
+            </BarChart>
+          </div>
+        ) : (
+          <p className="text-xs font-semibold text-[#8da0c0]">
+            {enabled
+              ? `No ${areaLabel.toLowerCase()} breakdown data yet.`
+              : "Loading chart..."}
+          </p>
+        )}
+      </div>
     </article>
   );
 }

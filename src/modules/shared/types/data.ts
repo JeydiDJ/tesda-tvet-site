@@ -55,3 +55,9 @@ export type AreaNode = {
   geometry?: StageGeometry;
   children?: AreaNode[];
 };
+
+export type PsgcSelection = {
+  regionPsgc: string | null;
+  provincePsgc: string | null;
+  cityMunicipalityPsgc: string | null;
+};

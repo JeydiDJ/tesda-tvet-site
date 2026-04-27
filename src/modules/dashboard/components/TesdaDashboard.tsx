@@ -1,41 +1,120 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DataBlueprint } from "@/modules/dashboard/components/DataBlueprint";
 import { PhilippinesMapPanel } from "@/modules/map/components/PhilippinesMapPanel";
 import { ProgramList } from "@/modules/dashboard/components/ProgramList";
+import {
+  getCompendiumSelection,
+} from "@/modules/dashboard/data/compendium";
 import {
   buildAreaIndex,
   getAreaPath,
   tesdaAtlas,
 } from "@/modules/dashboard/data/mockData";
+import type { PsgcSelection } from "@/modules/shared/types/data";
 
 export function TesdaDashboard() {
   const [activeId, setActiveId] = useState("ph");
+  const [psgcSelection, setPsgcSelection] = useState<PsgcSelection>({
+    regionPsgc: null,
+    provincePsgc: null,
+    cityMunicipalityPsgc: null,
+  });
+  const [liveDashboardStats, setLiveDashboardStats] = useState<{
+    institutions: number;
+    registeredPrograms: number;
+    enrolledNonScholars: number;
+  } | null>(null);
   const areaIndex = useMemo(() => buildAreaIndex(tesdaAtlas), []);
   const activeArea = areaIndex.get(activeId) ?? tesdaAtlas;
-  const path = getAreaPath(tesdaAtlas, activeArea.id);
+  const path = useMemo(
+    () => getAreaPath(tesdaAtlas, activeArea.id),
+    [activeArea.id],
+  );
+  const compendiumSelection = useMemo(
+    () => getCompendiumSelection(activeArea, path),
+    [activeArea.id, path],
+  );
+  const effectiveArea = useMemo(
+    () => ({
+      ...activeArea,
+      metrics: {
+        ...activeArea.metrics,
+        institutions:
+          liveDashboardStats?.institutions ??
+          activeArea.metrics.institutions,
+        registeredPrograms:
+          liveDashboardStats?.registeredPrograms ??
+          activeArea.metrics.registeredPrograms,
+        enrolledNonScholars:
+          liveDashboardStats?.enrolledNonScholars ??
+          activeArea.metrics.enrolledNonScholars,
+      },
+    }),
+    [activeArea, liveDashboardStats],
+  );
 
   const handleSelect = (id: string) => {
     setActiveId(id);
   };
 
+  const handlePsgcSelectionChange = (selection: PsgcSelection) => {
+    setPsgcSelection(selection);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/dashboard/live-stats", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        psgcSelection,
+        compendiumSelection,
+        year: 2024,
+      }),
+      cache: "no-store",
+    })
+      .then((response) => response.json() as Promise<{
+        data: {
+          institutions: number;
+          registeredPrograms: number;
+          enrolledNonScholars: number;
+        } | null;
+      }>)
+      .then((payload) => {
+        if (cancelled) return;
+        setLiveDashboardStats(payload.data ?? null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLiveDashboardStats(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [psgcSelection, compendiumSelection, activeArea.id]);
+
   return (
     <main className="min-h-screen bg-transparent">
       <PhilippinesMapPanel
-        activeArea={activeArea}
+        activeArea={effectiveArea}
         path={path}
         onSelect={handleSelect}
         onInteractionStart={() => undefined}
+        onPsgcSelectionChange={handlePsgcSelectionChange}
       />
 
       <div className="mx-auto flex w-full max-w-[1900px] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
         <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-          <DetailsPanel activeAreaName={activeArea.name} />
+          <DetailsPanel activeAreaName={effectiveArea.name} />
           <QuickCharts />
         </section>
 
-        <ProgramList programs={activeArea.programs} />
+        <ProgramList programs={effectiveArea.programs} />
         <DataBlueprint />
       </div>
     </main>
